@@ -1,0 +1,3207 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<!-- ============================================================================
+     MATRIZ DE RIESGOS MIPG "VIVA" — aplicación genérica multi-entidad
+     ----------------------------------------------------------------------------
+     Un solo archivo HTML. React 18 (UMD) + Babel standalone + Tailwind CDN +
+     Firebase compat (Firestore, sesión anónima) + xlsx-js-style para Excel.
+     Metodología: Guía para la administración del riesgo del DAFP (MIPG):
+       · Probabilidad e impacto en 5 niveles (20% a 100%).
+       · Controles con atributos de eficiencia (tipo + implementación) que
+         reducen probabilidad (preventivo/detectivo) o impacto (correctivo)
+         de forma secuencial para obtener el riesgo residual.
+       · Mapa de calor 5×5 con zonas Bajo / Moderado / Alto / Extremo.
+       · Riesgos de corrupción: impacto mínimo Moderado y sin opción "Aceptar".
+
+     INSTALACIÓN (3 pasos)
+     1) En la consola de Firebase crea un proyecto, activa Firestore y la
+        autenticación ANÓNIMA. Copia el objeto firebaseConfig.
+     2) Pega esa configuración en la sección "1. CONFIGURACIÓN" más abajo
+        (reemplaza los valores TU_...).
+     3) Publica en Firestore las reglas sugeridas de este comentario.
+     Sin configuración, la app ofrece un MODO DEMOSTRACIÓN en memoria
+     (datos de ejemplo, nada se guarda) para explorar la interfaz.
+
+     COLECCIONES EN FIRESTORE
+       usuarios/{id}                → login propio de la app (clave con hash)
+       entidades/{id}               → entidades públicas y sus procesos
+       entidades/{id}/historial/{h} → bitácora automática de cambios
+       riesgos/{id}                 → riesgos (campo entidadId), con arrays
+                                      de controles, plan de acción y seguimientos
+
+     REGLAS DE FIRESTORE SUGERIDAS (pegar en la pestaña Reglas)
+     ------------------------------------------------------------------
+     rules_version = '2';
+     service cloud.firestore {
+       match /databases/{database}/documents {
+         // La app abre sesión anónima de Firebase y encima aplica su propio
+         // login (colección usuarios) y control por roles. Estas reglas exigen
+         // como mínimo una sesión firmada.
+         function sesionFirmada() { return request.auth != null; }
+
+         match /usuarios/{id}    { allow read, write: if sesionFirmada(); }
+         match /entidades/{id}   {
+           allow read, write: if sesionFirmada();
+           match /historial/{h}  { allow read, create: if sesionFirmada(); }
+         }
+         match /riesgos/{id}     { allow read, write: if sesionFirmada(); }
+         match /{documento=**}   { allow read, write: if false; }
+       }
+     }
+     ------------------------------------------------------------------
+     ADVERTENCIA: con sesión anónima, cualquiera que tenga la URL del sitio
+     puede leer/escribir estas colecciones. Para producción con datos
+     sensibles considera Firebase Auth con correo o App Check.
+     ============================================================================ -->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="description" content="Matriz de riesgos MIPG viva: registro, valoración DAFP, mapa de calor, planes de acción y seguimiento periódico para entidades públicas." />
+<title>Matriz de Riesgos MIPG</title>
+
+<!-- Tipografías: Public Sans (diseñada para gobierno) + Bitter para titulares -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bitter:wght@600;700&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+<!-- Tailwind por CDN + configuración del tema -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        colors: {
+          tinta: '#16324F',          // azul institucional profundo (marca de la app)
+          'tinta-claro': '#1F4E7A',
+          'tinta-tenue': '#E8EEF4',
+          papel: '#F4F6F8'
+        },
+        fontFamily: {
+          display: ['Bitter', 'Georgia', 'serif'],
+          cuerpo: ['Public Sans', 'system-ui', 'Segoe UI', 'sans-serif']
+        }
+      }
+    }
+  };
+</script>
+
+<!-- React 18 UMD + Babel standalone (JSX transpilado en el navegador, sin build) -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+
+<!-- Firebase compat (app + auth + firestore) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+<!-- xlsx-js-style: exportación a Excel con estilos (plan B: CSV) -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+
+<style>
+  :root { color-scheme: light; }
+  .dark { color-scheme: dark; }
+  body { font-family: 'Public Sans', system-ui, 'Segoe UI', sans-serif; }
+  .font-display { font-family: 'Bitter', Georgia, serif; }
+
+  /* Animaciones de entrada (estilo de la casa) */
+  @keyframes aparecer { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes subir { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  .animar-aparecer { animation: aparecer .18s ease-out; }
+  .animar-subir { animation: subir .22s ease-out; }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+
+  /* Barra de desplazamiento discreta */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 8px; }
+  .dark ::-webkit-scrollbar-thumb { background: #475569; }
+
+  /* Mapa de calor */
+  .celda-mapa { transition: transform .12s ease, box-shadow .12s ease; }
+  .celda-mapa:hover, .celda-mapa:focus-visible { transform: scale(1.06); z-index: 5; box-shadow: 0 4px 14px rgba(0,0,0,.28); }
+
+  /* Accesibilidad: foco visible siempre */
+  :focus-visible { outline: 2px solid #16324F; outline-offset: 2px; }
+  .dark :focus-visible { outline-color: #7FB3C8; }
+
+  /* Recorte de texto a dos líneas en tablas */
+  .linea-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+  /* Columna fija en tablas anchas */
+  .col-fija { position: sticky; left: 0; }
+
+  /* El input date de iOS necesita altura mínima para no colapsar */
+  input[type="date"] { min-height: 38px; }
+
+  /* Cargador inicial (antes de que React tome el control) */
+  .cargador-inicial { width: 42px; height: 42px; border: 4px solid #E8EEF4; border-top-color: #16324F; border-radius: 50%; animation: girar 0.9s linear infinite; }
+  @keyframes girar { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body class="bg-papel dark:bg-slate-950 text-slate-800 dark:text-slate-200 font-cuerpo antialiased">
+
+<div id="root">
+  <div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;">
+    <div class="cargador-inicial" role="status" aria-label="Cargando"></div>
+    <p style="color:#64748b;font-size:14px;">Cargando la matriz de riesgos…</p>
+  </div>
+</div>
+
+<!-- ========================================================================
+     1. CONFIGURACIÓN DE FIREBASE
+     Estructura del bloque:
+       1.1 Claves del proyecto (reemplazar TU_...)
+       1.2 Inicialización, long-polling y persistencia offline
+       1.3 Sesión anónima (window.authReady)
+     La seguridad real vive en las reglas de Firestore, no en ocultar claves.
+     ======================================================================== -->
+<script>
+'use strict';
+
+/* ===== 1.1 Claves del proyecto ===== */
+const FIREBASE_CONFIG = {
+  apiKey: 'TU_API_KEY',
+  authDomain: 'TU_PROYECTO.firebaseapp.com',
+  projectId: 'TU_PROYECTO',
+  storageBucket: 'TU_PROYECTO.appspot.com',
+  messagingSenderId: 'TU_SENDER_ID',
+  appId: 'TU_APP_ID'
+};
+
+/* La app detecta si aún no se pegó la configuración real */
+window.FIREBASE_CONFIGURADO = !/^TU_/.test(FIREBASE_CONFIG.apiKey || 'TU_');
+window.db = null;
+window.authReady = Promise.resolve(null);
+
+if (window.FIREBASE_CONFIGURADO) {
+  try {
+    /* ===== 1.2 Inicialización y robustez de red ===== */
+    firebase.initializeApp(FIREBASE_CONFIG);
+    const db = firebase.firestore();
+    /* Redes institucionales con proxy: detectar long-polling automáticamente */
+    db.settings({ experimentalAutoDetectLongPolling: true, merge: true });
+    /* Persistencia offline: la matriz sigue consultable sin internet */
+    db.enablePersistence({ synchronizeTabs: true }).catch(function (err) {
+      console.warn('Persistencia offline no disponible:', err && err.code);
+    });
+    window.db = db;
+
+    /* ===== 1.3 Sesión anónima ===== */
+    window.authReady = firebase.auth().signInAnonymously()
+      .then(function (cred) { return cred.user; })
+      .catch(function (err) {
+        console.error('No fue posible abrir la sesión anónima:', err);
+        throw err;
+      });
+  } catch (err) {
+    console.error('Error inicializando Firebase:', err);
+    window.FIREBASE_CONFIGURADO = false;
+  }
+}
+</script>
+
+<!-- ========================================================================
+     2. CAPA DE DATOS (window.DB)
+     Estructura del bloque:
+       2.1 Utilidades comunes (hash de clave, clonado, ids)
+       2.2 Backend Firestore
+       2.3 Backend en memoria (modo demostración)
+       2.4 Datos de demostración
+       2.5 API pública window.DB
+     La interfaz NUNCA habla con Firestore directamente: siempre pasa por DB.
+     ======================================================================== -->
+<script>
+'use strict';
+
+/* ===== 2.1 Utilidades comunes ===== */
+
+/* Hash de clave: SHA-256 de "usuario:clave" (usuario en minúsculas actúa de sal).
+   Plan B si el navegador no expone crypto.subtle: hash djb2 (más débil). */
+window.calcularHashClave = async function (usuario, clave) {
+  const texto = String(usuario || '').trim().toLowerCase() + ':' + String(clave || '');
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(texto));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch (e) {
+    let h = 5381;
+    for (let i = 0; i < texto.length; i++) h = ((h << 5) + h + texto.charCodeAt(i)) >>> 0;
+    return 'djb2_' + h.toString(16);
+  }
+};
+
+const clonar = (o) => JSON.parse(JSON.stringify(o));
+let contadorMem = 0;
+const idMem = (prefijo) => prefijo + '_' + Date.now().toString(36) + '_' + (++contadorMem);
+
+/* ===== 2.2 Backend Firestore ===== */
+const BackendFirestore = {
+  async listo() { await window.authReady; return window.db; },
+
+  async hayUsuarios() {
+    const db = await this.listo();
+    const res = await db.collection('usuarios').limit(1).get();
+    return !res.empty;
+  },
+  async buscarUsuarioPorLogin(usuario) {
+    const db = await this.listo();
+    const res = await db.collection('usuarios')
+      .where('usuario', '==', String(usuario || '').trim().toLowerCase()).limit(1).get();
+    return res.empty ? null : { id: res.docs[0].id, ...res.docs[0].data() };
+  },
+  async listarUsuarios() {
+    const db = await this.listo();
+    const res = await db.collection('usuarios').get();
+    return res.docs.map(d => ({ id: d.id, ...d.data() }));
+  },
+  async crearUsuario(datos) {
+    const db = await this.listo();
+    const ref = await db.collection('usuarios').add(datos);
+    return ref.id;
+  },
+  async actualizarUsuario(id, parciales) {
+    const db = await this.listo();
+    await db.collection('usuarios').doc(id).update(parciales);
+  },
+
+  async listarEntidades() {
+    const db = await this.listo();
+    const res = await db.collection('entidades').get();
+    return res.docs.map(d => ({ id: d.id, ...d.data() }));
+  },
+  async crearEntidad(datos) {
+    const db = await this.listo();
+    const ref = await db.collection('entidades').add(datos);
+    return ref.id;
+  },
+  async actualizarEntidad(id, parciales) {
+    const db = await this.listo();
+    await db.collection('entidades').doc(id).update(parciales);
+  },
+
+  suscribirRiesgos(entidadId, alCambiar, alFallar) {
+    /* onSnapshot mantiene la matriz "viva": cualquier cambio llega en segundos.
+       El orden se resuelve en el cliente para no exigir índices compuestos. */
+    return window.db.collection('riesgos')
+      .where('entidadId', '==', entidadId)
+      .onSnapshot(
+        res => alCambiar(res.docs.map(d => ({ id: d.id, ...d.data() }))),
+        err => { console.error('Suscripción de riesgos:', err); if (alFallar) alFallar(err); }
+      );
+  },
+  async crearRiesgo(datos) {
+    const db = await this.listo();
+    const ref = await db.collection('riesgos').add(datos);
+    return ref.id;
+  },
+  async actualizarRiesgo(id, parciales) {
+    const db = await this.listo();
+    await db.collection('riesgos').doc(id).update(parciales);
+  },
+  async eliminarRiesgo(id) {
+    const db = await this.listo();
+    await db.collection('riesgos').doc(id).delete();
+  },
+  async agregarSeguimiento(riesgoId, seguimiento) {
+    const db = await this.listo();
+    /* arrayUnion evita pisar seguimientos si dos personas registran a la vez */
+    await db.collection('riesgos').doc(riesgoId).update({
+      seguimientos: firebase.firestore.FieldValue.arrayUnion(seguimiento),
+      actualizadoEn: new Date().toISOString()
+    });
+  },
+
+  async registrarHistorial(entidadId, evento) {
+    const db = await this.listo();
+    await db.collection('entidades').doc(entidadId).collection('historial').add(evento);
+  },
+  async listarHistorial(entidadId, limite) {
+    const db = await this.listo();
+    const res = await db.collection('entidades').doc(entidadId)
+      .collection('historial').orderBy('fecha', 'desc').limit(limite || 300).get();
+    return res.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
+};
+
+/* ===== 2.3 Backend en memoria (modo demostración) ===== */
+const MEM = { usuarios: [], entidades: [], riesgos: [], historial: {}, oyentes: [] };
+
+const emitirRiesgos = (entidadId) => {
+  MEM.oyentes
+    .filter(o => o.entidadId === entidadId)
+    .forEach(o => o.alCambiar(clonar(MEM.riesgos.filter(r => r.entidadId === entidadId))));
+};
+
+const BackendMemoria = {
+  async hayUsuarios() { return MEM.usuarios.length > 0; },
+  async buscarUsuarioPorLogin(usuario) {
+    const u = MEM.usuarios.find(x => x.usuario === String(usuario || '').trim().toLowerCase());
+    return u ? clonar(u) : null;
+  },
+  async listarUsuarios() { return clonar(MEM.usuarios); },
+  async crearUsuario(datos) { const id = idMem('usr'); MEM.usuarios.push({ id, ...clonar(datos) }); return id; },
+  async actualizarUsuario(id, p) {
+    const u = MEM.usuarios.find(x => x.id === id); if (u) Object.assign(u, clonar(p));
+  },
+
+  async listarEntidades() { return clonar(MEM.entidades); },
+  async crearEntidad(datos) { const id = idMem('ent'); MEM.entidades.push({ id, ...clonar(datos) }); return id; },
+  async actualizarEntidad(id, p) {
+    const e = MEM.entidades.find(x => x.id === id); if (e) Object.assign(e, clonar(p));
+  },
+
+  suscribirRiesgos(entidadId, alCambiar) {
+    const oyente = { entidadId, alCambiar };
+    MEM.oyentes.push(oyente);
+    setTimeout(() => emitirRiesgos(entidadId), 0);
+    return () => { MEM.oyentes = MEM.oyentes.filter(o => o !== oyente); };
+  },
+  async crearRiesgo(datos) {
+    const id = idMem('rsg'); MEM.riesgos.push({ id, ...clonar(datos) });
+    emitirRiesgos(datos.entidadId); return id;
+  },
+  async actualizarRiesgo(id, p) {
+    const r = MEM.riesgos.find(x => x.id === id);
+    if (r) { Object.assign(r, clonar(p)); emitirRiesgos(r.entidadId); }
+  },
+  async eliminarRiesgo(id) {
+    const r = MEM.riesgos.find(x => x.id === id);
+    MEM.riesgos = MEM.riesgos.filter(x => x.id !== id);
+    if (r) emitirRiesgos(r.entidadId);
+  },
+  async agregarSeguimiento(riesgoId, seg) {
+    const r = MEM.riesgos.find(x => x.id === riesgoId);
+    if (r) {
+      r.seguimientos = r.seguimientos || [];
+      r.seguimientos.push(clonar(seg));
+      r.actualizadoEn = new Date().toISOString();
+      emitirRiesgos(r.entidadId);
+    }
+  },
+
+  async registrarHistorial(entidadId, ev) {
+    MEM.historial[entidadId] = MEM.historial[entidadId] || [];
+    MEM.historial[entidadId].unshift({ id: idMem('his'), ...clonar(ev) });
+  },
+  async listarHistorial(entidadId, limite) {
+    return clonar((MEM.historial[entidadId] || []).slice(0, limite || 300));
+  }
+};
+
+/* ===== 2.4 Datos de demostración ===== */
+async function sembrarDemostracion() {
+  const ahora = new Date().toISOString();
+  const anio = new Date().getFullYear();
+  const claveHash = await window.calcularHashClave('admin', 'admin');
+
+  MEM.usuarios = [{
+    id: 'usr_demo_admin', usuario: 'admin', nombre: 'Administración (demo)',
+    rol: 'admin', entidades: 'todas', activo: true, claveHash, creadoEn: ahora
+  }];
+
+  MEM.entidades = [{
+    id: 'ent_demo', nombre: 'Entidad de Demostración', sigla: 'DEMO',
+    nit: '900.000.000-1', activo: true, creadoEn: ahora,
+    procesos: ['Gestión Financiera', 'Talento Humano', 'Contratación',
+               'Gestión TIC', 'Atención al Ciudadano', 'Planeación Estratégica']
+  }];
+
+  const base = (n) => ({
+    entidadId: 'ent_demo', estado: 'Activo', seguimientos: [], plan: [],
+    controles: [], responsable: '', creadoEn: ahora, actualizadoEn: ahora,
+    creadoPor: 'admin', codigo: 'R-DEMO-00' + n
+  });
+
+  MEM.riesgos = [
+    { ...base(1), proceso: 'Gestión Financiera', tipo: 'Gestión',
+      nombre: 'Errores u omisiones en los registros contables que afecten la razonabilidad de los estados financieros',
+      causas: 'Alta rotación del personal contable\nParametrización errada del software financiero',
+      consecuencias: 'Hallazgos de auditoría y de la Contraloría\nSanciones disciplinarias y fiscales',
+      probabilidad: 3, impacto: 4, tratamiento: 'Reducir (mitigar)', responsable: 'Dirección Financiera',
+      controles: [
+        { descripcion: 'Conciliaciones bancarias y contables mensuales', tipo: 'Preventivo', implementacion: 'Manual', responsable: 'Contador', documentacion: 'Documentado', frecuencia: 'Continua', evidencia: 'Con registro' },
+        { descripcion: 'Revisión del cierre contable por el contador líder', tipo: 'Detectivo', implementacion: 'Manual', responsable: 'Contador líder', documentacion: 'Documentado', frecuencia: 'Continua', evidencia: 'Con registro' }
+      ],
+      plan: [
+        { descripcion: 'Actualizar el manual de políticas contables', responsable: 'Contador', fecha: anio + '-03-31', estado: 'Cumplida' },
+        { descripcion: 'Capacitar al equipo en el nuevo catálogo de cuentas', responsable: 'Talento Humano', fecha: anio + '-09-30', estado: 'En curso' }
+      ],
+      seguimientos: [
+        { fecha: anio + '-03-28', periodo: 'T1-' + anio, eficacia: 'Eficaz',
+          observacion: 'Conciliaciones al día; sin partidas pendientes mayores a 30 días.',
+          evidencia: 'Acta de cierre contable de marzo', usuario: 'admin' }
+      ] },
+
+    { ...base(2), proceso: 'Contratación', tipo: 'Corrupción',
+      nombre: 'Direccionamiento de procesos contractuales para favorecer a un tercero a cambio de un beneficio particular',
+      causas: 'Estudios previos elaborados por una sola persona\nDebilidades en la declaración de conflictos de interés',
+      consecuencias: 'Detrimento patrimonial\nInvestigaciones disciplinarias, fiscales y penales\nPérdida de confianza ciudadana',
+      probabilidad: 2, impacto: 5, tratamiento: 'Reducir (mitigar)', responsable: 'Secretaría General',
+      controles: [
+        { descripcion: 'Comité evaluador plural con declaración de conflictos de interés', tipo: 'Preventivo', implementacion: 'Manual', responsable: 'Comité de contratación', documentacion: 'Documentado', frecuencia: 'Continua', evidencia: 'Con registro' },
+        { descripcion: 'Publicación integral del proceso en SECOP II con pliegos tipo', tipo: 'Preventivo', implementacion: 'Automático', responsable: 'Oficina de contratación', documentacion: 'Documentado', frecuencia: 'Continua', evidencia: 'Con registro' }
+      ],
+      plan: [
+        { descripcion: 'Adoptar matriz de conflictos de interés por proceso contractual', responsable: 'Control Interno', fecha: anio + '-08-31', estado: 'En curso' }
+      ],
+      seguimientos: [
+        { fecha: anio + '-04-05', periodo: 'T1-' + anio, eficacia: 'Con observaciones',
+          observacion: 'Dos procesos publicados fuera del término; se reforzó la lista de chequeo.',
+          evidencia: 'https://www.colombiacompra.gov.co', usuario: 'admin' }
+      ] },
+
+    { ...base(3), proceso: 'Gestión TIC', tipo: 'Seguridad de la información',
+      nombre: 'Indisponibilidad de los sistemas de información críticos por fallas de infraestructura o ataques informáticos',
+      causas: 'Infraestructura sin redundancia\nCorreos de suplantación (phishing) al personal',
+      consecuencias: 'Interrupción de trámites y servicios al ciudadano\nPérdida o secuestro de información',
+      probabilidad: 3, impacto: 4, tratamiento: 'Reducir (mitigar)', responsable: 'Líder TIC',
+      controles: [
+        { descripcion: 'Copias de seguridad diarias automáticas con verificación de restauración', tipo: 'Preventivo', implementacion: 'Automático', responsable: 'Administrador de plataforma', documentacion: 'Documentado', frecuencia: 'Continua', evidencia: 'Con registro' },
+        { descripcion: 'Monitoreo automático de disponibilidad con alertas', tipo: 'Detectivo', implementacion: 'Automático', responsable: 'Mesa de servicios', documentacion: 'Documentado', frecuencia: 'Continua', evidencia: 'Con registro' }
+      ],
+      plan: [
+        { descripcion: 'Ejecutar simulacro de recuperación ante desastres', responsable: 'Líder TIC', fecha: anio + '-05-31', estado: 'En curso' }
+      ],
+      seguimientos: [] },
+
+    { ...base(4), proceso: 'Talento Humano', tipo: 'Gestión',
+      nombre: 'Vinculación de personal sin verificación completa de requisitos y antecedentes',
+      causas: 'Presión por tiempos de vinculación\nLista de chequeo desactualizada',
+      consecuencias: 'Nulidad de actos administrativos\nHallazgos disciplinarios',
+      probabilidad: 2, impacto: 3, tratamiento: 'Reducir (mitigar)', responsable: 'Talento Humano',
+      controles: [
+        { descripcion: 'Lista de chequeo de vinculación con doble verificación de antecedentes', tipo: 'Preventivo', implementacion: 'Manual', responsable: 'Profesional de Talento Humano', documentacion: 'Documentado', frecuencia: 'Continua', evidencia: 'Con registro' }
+      ],
+      plan: [], seguimientos: [] },
+
+    { ...base(5), proceso: 'Atención al Ciudadano', tipo: 'Gestión',
+      nombre: 'Vencimiento de los términos legales para responder PQRSD',
+      causas: 'Reparto tardío entre dependencias\nAusencia de alertas de vencimiento',
+      consecuencias: 'Acciones de tutela\nSanciones por silencio administrativo',
+      probabilidad: 4, impacto: 3, tratamiento: 'Reducir (mitigar)', responsable: 'Atención al Ciudadano',
+      controles: [
+        { descripcion: 'Alertas automáticas de vencimiento en el gestor documental', tipo: 'Preventivo', implementacion: 'Automático', responsable: 'Gestión documental', documentacion: 'Documentado', frecuencia: 'Continua', evidencia: 'Con registro' },
+        { descripcion: 'Informe semanal de PQRSD próximas a vencer', tipo: 'Detectivo', implementacion: 'Manual', responsable: 'Control Interno', documentacion: 'Documentado', frecuencia: 'Continua', evidencia: 'Con registro' }
+      ],
+      plan: [
+        { descripcion: 'Parametrizar semáforo de términos por tipología de petición', responsable: 'Líder TIC', fecha: anio + '-07-31', estado: 'Pendiente' }
+      ],
+      seguimientos: [
+        { fecha: (anio - 1) + '-12-20', periodo: 'T4-' + (anio - 1), eficacia: 'Eficaz',
+          observacion: 'Cumplimiento del 98% en términos durante el trimestre.', evidencia: 'Informe PQRSD T4', usuario: 'admin' },
+        { fecha: anio + '-03-30', periodo: 'T1-' + anio, eficacia: 'Eficaz',
+          observacion: 'Sin tutelas por silencio administrativo en el periodo.', evidencia: 'Informe PQRSD T1', usuario: 'admin' }
+      ] },
+
+    { ...base(6), proceso: 'Gestión Financiera', tipo: 'Gestión',
+      nombre: 'Pérdida de recursos por giros a cuentas bancarias erradas o inexistentes',
+      causas: 'Registro manual de cuentas de terceros sin doble verificación',
+      consecuencias: 'Detrimento patrimonial\nProcesos de repetición',
+      probabilidad: 1, impacto: 4, tratamiento: 'Reducir (mitigar)', responsable: 'Tesorería',
+      estado: 'Materializado',
+      controles: [],
+      plan: [
+        { descripcion: 'Implementar validación bancaria previa al giro (archivo plano)', responsable: 'Tesorería', fecha: anio + '-08-15', estado: 'Pendiente' }
+      ],
+      seguimientos: [
+        { fecha: new Date().toISOString().slice(0, 10),
+          periodo: 'T' + (Math.floor(new Date().getMonth() / 3) + 1) + '-' + anio, eficacia: 'Ineficaz',
+          observacion: 'Se materializó: giro por $4,2 millones a cuenta errada; en recuperación con el banco.',
+          evidencia: 'Memorando TES-045', usuario: 'admin' }
+      ] },
+
+    { ...base(7), proceso: 'Planeación Estratégica', tipo: 'Gestión',
+      nombre: 'Incumplimiento de metas del plan de acción institucional por deficiencias en el seguimiento',
+      causas: 'Indicadores sin línea base\nReporte extemporáneo de las dependencias',
+      consecuencias: 'Baja calificación en el FURAG\nReprocesos en la rendición de cuentas',
+      probabilidad: 1, impacto: 2, tratamiento: 'Aceptar', responsable: 'Oficina de Planeación',
+      controles: [], plan: [], seguimientos: [] }
+  ];
+
+  MEM.historial = { ent_demo: [
+    { id: idMem('his'), fecha: ahora, usuario: 'admin', riesgoCodigo: '', accion: 'Inicio',
+      detalle: 'Se cargaron los datos de demostración.' }
+  ] };
+}
+
+/* ===== 2.5 API pública ===== */
+let backendActivo = null;
+let modoActivo = 'sin-iniciar';
+
+window.DB = {
+  get modo() { return modoActivo; },
+
+  async iniciar(modo) {
+    if (modo === 'memoria') {
+      await sembrarDemostracion();
+      backendActivo = BackendMemoria;
+    } else {
+      backendActivo = BackendFirestore;
+      await BackendFirestore.listo(); // valida configuración y sesión anónima
+    }
+    modoActivo = modo;
+  },
+
+  hayUsuarios: (...a) => backendActivo.hayUsuarios(...a),
+  buscarUsuarioPorLogin: (...a) => backendActivo.buscarUsuarioPorLogin(...a),
+  listarUsuarios: (...a) => backendActivo.listarUsuarios(...a),
+  crearUsuario: (...a) => backendActivo.crearUsuario(...a),
+  actualizarUsuario: (...a) => backendActivo.actualizarUsuario(...a),
+
+  listarEntidades: (...a) => backendActivo.listarEntidades(...a),
+  crearEntidad: (...a) => backendActivo.crearEntidad(...a),
+  actualizarEntidad: (...a) => backendActivo.actualizarEntidad(...a),
+
+  suscribirRiesgos: (...a) => backendActivo.suscribirRiesgos(...a),
+  crearRiesgo: (...a) => backendActivo.crearRiesgo(...a),
+  actualizarRiesgo: (...a) => backendActivo.actualizarRiesgo(...a),
+  eliminarRiesgo: (...a) => backendActivo.eliminarRiesgo(...a),
+  agregarSeguimiento: (...a) => backendActivo.agregarSeguimiento(...a),
+
+  registrarHistorial: (...a) => backendActivo.registrarHistorial(...a),
+  listarHistorial: (...a) => backendActivo.listarHistorial(...a)
+};
+</script>
+
+<!-- ========================================================================
+     3. APLICACIÓN (React + JSX vía Babel)
+     Estructura del bloque:
+       3.1  Constantes de la metodología DAFP (niveles, matriz, controles)
+       3.2  Utilidades (fechas, cálculo del riesgo residual, resumen de cambios)
+       3.3  Íconos SVG
+       3.4  Exportación / importación de Excel (plan B: CSV)
+       3.5  Componentes básicos (chips, avisos, ventanas modales)
+       3.6  Pantallas de acceso (configurar, ingresar, primer uso, entidad)
+       3.7  Pestaña Panel
+       3.8  Pestaña Mapa de calor
+       3.9  Pestaña Riesgos + formulario del riesgo y sus controles
+       3.10 Pestaña Seguimiento
+       3.11 Pestaña Administración (entidades, usuarios, historial)
+       3.12 Componente raíz y montaje
+     ======================================================================== -->
+<script type="text/babel" data-presets="react">
+'use strict';
+const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+/* ===== 3.1 Constantes de la metodología DAFP ===== */
+
+const NIVELES_PROBABILIDAD_DEFAULT = [
+  { nivel: 1, etiqueta: 'Muy baja', pct: 20,  criterio: 'La actividad se ejecuta como máximo 2 veces al año' },
+  { nivel: 2, etiqueta: 'Baja',     pct: 40,  criterio: 'Entre 3 y 24 veces al año' },
+  { nivel: 3, etiqueta: 'Media',    pct: 60,  criterio: 'Entre 24 y 500 veces al año' },
+  { nivel: 4, etiqueta: 'Alta',     pct: 80,  criterio: 'Mínimo 500 veces al año' },
+  { nivel: 5, etiqueta: 'Muy alta', pct: 100, criterio: 'Más de 5000 veces al año' }
+];
+
+const NIVELES_IMPACTO_DEFAULT = [
+  { nivel: 1, etiqueta: 'Leve',         pct: 20,  criterio: 'Afectación menor al 0,5% del presupuesto; sin efecto reputacional relevante' },
+  { nivel: 2, etiqueta: 'Menor',        pct: 40,  criterio: 'Entre el 0,5% y el 1% del presupuesto; reclamaciones puntuales' },
+  { nivel: 3, etiqueta: 'Moderado',     pct: 60,  criterio: 'Entre el 1% y el 5% del presupuesto; quejas de usuarios o medios locales' },
+  { nivel: 4, etiqueta: 'Mayor',        pct: 80,  criterio: 'Entre el 5% y el 20% del presupuesto; sanciones o medios regionales' },
+  { nivel: 5, etiqueta: 'Catastrófico', pct: 100, criterio: 'Más del 20% del presupuesto; intervención o medios nacionales' }
+];
+
+/* Mapa de calor DAFP: MATRIZ_ZONAS[probabilidad][impacto-1] */
+const MATRIZ_ZONAS_DEFAULT = {
+  5: ['Alto', 'Alto', 'Extremo', 'Extremo', 'Extremo'],
+  4: ['Moderado', 'Alto', 'Alto', 'Extremo', 'Extremo'],
+  3: ['Moderado', 'Moderado', 'Alto', 'Extremo', 'Extremo'],
+  2: ['Bajo', 'Moderado', 'Moderado', 'Alto', 'Extremo'],
+  1: ['Bajo', 'Bajo', 'Moderado', 'Alto', 'Extremo']
+};
+
+const ZONAS = {
+  Bajo:     { orden: 1, color: '#2E7D32', textoOscuro: false },
+  Moderado: { orden: 2, color: '#F9A825', textoOscuro: true  },
+  Alto:     { orden: 3, color: '#EF6C00', textoOscuro: false },
+  Extremo:  { orden: 4, color: '#C62828', textoOscuro: false }
+};
+const NOMBRES_ZONAS = ['Bajo', 'Moderado', 'Alto', 'Extremo'];
+
+const zonaDe = (p, i) => (MATRIZ_ZONAS_DEFAULT[p] || MATRIZ_ZONAS_DEFAULT[1])[(i || 1) - 1];
+
+/* Atributos de eficiencia del control (Guía DAFP): el porcentaje del tipo más
+   el de la implementación definen cuánto reduce el control. Los preventivos y
+   detectivos reducen la PROBABILIDAD; los correctivos, el IMPACTO. */
+const TIPOS_CONTROL = {
+  Preventivo: { pct: 25, afecta: 'probabilidad' },
+  Detectivo:  { pct: 15, afecta: 'probabilidad' },
+  Correctivo: { pct: 10, afecta: 'impacto' }
+};
+const IMPLEMENTACION_CONTROL = { 'Automático': 25, 'Manual': 15 };
+const valoracionControl = (c) =>
+  ((TIPOS_CONTROL[c.tipo] || {}).pct || 0) + (IMPLEMENTACION_CONTROL[c.implementacion] || 0);
+
+const TIPOS_RIESGO = ['Gestión', 'Corrupción', 'Seguridad de la información'];
+const TRATAMIENTOS = ['Aceptar', 'Reducir (mitigar)', 'Evitar', 'Compartir o transferir'];
+/* Para riesgos de corrupción la guía DAFP no admite "Aceptar" */
+const tratamientosPara = (tipo) => tipo === 'Corrupción' ? TRATAMIENTOS.slice(1) : TRATAMIENTOS;
+
+const ESTADOS_RIESGO = ['Activo', 'Materializado', 'Cerrado'];
+const ESTADOS_ACCION = ['Pendiente', 'En curso', 'Cumplida'];
+const EFICACIAS = ['Eficaz', 'Con observaciones', 'Ineficaz'];
+const ROLES = [
+  { valor: 'admin',    etiqueta: 'Administración', ayuda: 'Todo: entidades, usuarios y riesgos' },
+  { valor: 'gestor',   etiqueta: 'Gestión',        ayuda: 'Crea y edita riesgos y seguimientos' },
+  { valor: 'consulta', etiqueta: 'Consulta',       ayuda: 'Solo lectura y exportación' }
+];
+
+/* ===== 3.2 Utilidades ===== */
+
+const hoyISO = () => {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+};
+/* Fechas AAAA-MM-DD → DD/MM/AAAA sin pasar por Date (evita desfase de zona) */
+const formatearFecha = (iso) => {
+  if (!iso) return '—';
+  const [a, m, d] = String(iso).slice(0, 10).split('-');
+  return (d && m && a) ? `${d}/${m}/${a}` : String(iso);
+};
+const formatearFechaHora = (iso) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return String(iso);
+  return formatearFecha(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'))
+    + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+};
+const periodoActual = () => {
+  const d = new Date();
+  return 'T' + (Math.floor(d.getMonth() / 3) + 1) + '-' + d.getFullYear();
+};
+const enLineas = (texto) => String(texto || '').split('\n').map(l => l.trim()).filter(Boolean);
+const accionVencida = (a) => !!a.fecha && a.estado !== 'Cumplida' && a.fecha < hoyISO();
+
+const nivelDesdePct = (pct) => pct <= 20 ? 1 : pct <= 40 ? 2 : pct <= 60 ? 3 : pct <= 80 ? 4 : 5;
+const redondear1 = (n) => Math.round(n * 10) / 10;
+
+/* Cálculo del riesgo residual según DAFP: los controles se aplican en cadena
+   sobre el porcentaje inherente y el resultado se lleva de nuevo a nivel 1–5. */
+const calcularResidual = (r) => {
+  const pInh = (NIVELES_PROBABILIDAD_DEFAULT[(r.probabilidad || 1) - 1] || {}).pct || 20;
+  const iInh = (NIVELES_IMPACTO_DEFAULT[(r.impacto || 1) - 1] || {}).pct || 20;
+  let pPct = pInh, iPct = iInh;
+  (r.controles || []).forEach(c => {
+    const v = valoracionControl(c) / 100;
+    if ((TIPOS_CONTROL[c.tipo] || {}).afecta === 'impacto') iPct = iPct * (1 - v);
+    else pPct = pPct * (1 - v);
+  });
+  let pRes = nivelDesdePct(pPct);
+  let iRes = nivelDesdePct(iPct);
+  let impactoAjustado = false;
+  /* Regla DAFP para corrupción: el impacto nunca baja de Moderado (3) */
+  if (r.tipo === 'Corrupción' && iRes < 3) { iRes = 3; impactoAjustado = true; }
+  if (r.tipo === 'Corrupción' && (r.impacto || 1) < 3) impactoAjustado = true;
+  return {
+    pInh, iInh,
+    pPct: redondear1(pPct), iPct: redondear1(iPct),
+    pRes, iRes, impactoAjustado,
+    zonaInherente: zonaDe(r.probabilidad || 1, Math.max(r.impacto || 1, r.tipo === 'Corrupción' ? 3 : 1)),
+    zonaResidual: zonaDe(pRes, iRes)
+  };
+};
+
+/* Resumen legible de qué cambió al editar (para la bitácora) */
+const resumirCambios = (antes, ahora) => {
+  const campos = [
+    ['codigo', 'código'], ['proceso', 'proceso'], ['tipo', 'tipo'],
+    ['nombre', 'descripción'], ['causas', 'causas'], ['consecuencias', 'consecuencias'],
+    ['probabilidad', 'probabilidad'], ['impacto', 'impacto'],
+    ['tratamiento', 'tratamiento'], ['responsable', 'responsable'], ['estado', 'estado']
+  ];
+  const cambios = campos.filter(([k]) => String(antes[k] ?? '') !== String(ahora[k] ?? '')).map(([, n]) => n);
+  if (JSON.stringify(antes.controles || []) !== JSON.stringify(ahora.controles || [])) cambios.push('controles');
+  if (JSON.stringify(antes.plan || []) !== JSON.stringify(ahora.plan || [])) cambios.push('plan de acción');
+  return cambios.length ? 'Cambió: ' + cambios.join(', ') : 'Sin cambios de fondo';
+};
+
+const siguienteCodigo = (riesgos, sigla) => {
+  const prefijo = 'R-' + (sigla || 'ENT').toUpperCase() + '-';
+  let mayor = 0;
+  riesgos.forEach(r => {
+    const m = String(r.codigo || '').match(new RegExp('^' + prefijo + '(\\d+)$'));
+    if (m) mayor = Math.max(mayor, parseInt(m[1], 10));
+  });
+  return prefijo + String(mayor + 1).padStart(3, '0');
+};
+
+const ordenarRiesgos = (lista) => [...lista].sort((a, b) => {
+  const za = (ZONAS[a.calc.zonaResidual] || {}).orden || 0;
+  const zb = (ZONAS[b.calc.zonaResidual] || {}).orden || 0;
+  if (za !== zb) return zb - za; // primero lo crítico
+  return String(a.codigo).localeCompare(String(b.codigo));
+});
+
+/* ===== 3.3 Íconos SVG (trazos simples, sin librerías) ===== */
+const Icono = ({ d, className }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+       strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+       className={className || 'h-4 w-4'}>{d}</svg>
+);
+const IcoOjo = (p) => <Icono {...p} d={<><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></>} />;
+const IcoLapiz = (p) => <Icono {...p} d={<><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></>} />;
+const IcoBasura = (p) => <Icono {...p} d={<><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></>} />;
+const IcoMas = (p) => <Icono {...p} d={<><path d="M12 5v14M5 12h14"/></>} />;
+const IcoDescarga = (p) => <Icono {...p} d={<><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></>} />;
+const IcoSubida = (p) => <Icono {...p} d={<><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></>} />;
+const IcoReloj = (p) => <Icono {...p} d={<><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></>} />;
+const IcoCerrar = (p) => <Icono {...p} d={<><path d="M18 6 6 18M6 6l12 12"/></>} />;
+const IcoLuna = (p) => <Icono {...p} d={<><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></>} />;
+const IcoSol = (p) => <Icono {...p} d={<><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></>} />;
+const IcoAlerta = (p) => <Icono {...p} d={<><path d="M12 3 2 21h20L12 3Z"/><path d="M12 10v4m0 3h.01"/></>} />;
+const IcoFlechaArriba = (p) => <Icono {...p} d={<><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></>} />;
+const IcoSalir = (p) => <Icono {...p} d={<><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></>} />;
+
+/* Marca de la app: un mini mapa de calor 5×5 dentro de un escudo */
+const LogoMatriz = ({ className }) => (
+  <svg viewBox="0 0 40 44" className={className || 'h-9 w-9'} aria-hidden="true">
+    <path d="M20 2 37 8v12c0 11-7 18-17 22C10 38 3 31 3 20V8Z" fill="#16324F"/>
+    <g transform="translate(10,11)">
+      {[0, 1, 2].map(f => [0, 1, 2].map(c => {
+        const colores = [['#2E7D32', '#F9A825', '#EF6C00'], ['#F9A825', '#EF6C00', '#C62828'], ['#EF6C00', '#C62828', '#C62828']];
+        return <rect key={f + '-' + c} x={c * 7} y={(2 - f) * 7} width="6" height="6" rx="1" fill={colores[f][c]} />;
+      }))}
+    </g>
+  </svg>
+);
+
+/* ===== 3.4 Exportación / importación de Excel ===== */
+
+const descargarBlob = (blob, nombre) => {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = nombre; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 400);
+};
+
+const quitarTildes = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+/* Estilos compartidos para xlsx-js-style */
+const estiloCabecera = {
+  font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 11 },
+  fill: { fgColor: { rgb: '16324F' } },
+  alignment: { vertical: 'center', horizontal: 'center', wrapText: true },
+  border: { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } }
+};
+const estiloCelda = {
+  alignment: { vertical: 'top', wrapText: true },
+  border: { top: { style: 'thin', color: { rgb: 'CBD5E1' } }, bottom: { style: 'thin', color: { rgb: 'CBD5E1' } }, left: { style: 'thin', color: { rgb: 'CBD5E1' } }, right: { style: 'thin', color: { rgb: 'CBD5E1' } } }
+};
+const estiloZona = (zona) => ({
+  ...estiloCelda,
+  font: { bold: true, color: { rgb: (ZONAS[zona] || {}).textoOscuro ? '1E293B' : 'FFFFFF' } },
+  fill: { fgColor: { rgb: ((ZONAS[zona] || {}).color || '#888888').replace('#', '') } },
+  alignment: { vertical: 'center', horizontal: 'center' }
+});
+
+const hojaDesdeMatriz = (filas, anchos, zonasEnCols) => {
+  const ws = XLSX.utils.aoa_to_sheet(filas.map(f => f.map(v => String(v ?? ''))));
+  const rango = XLSX.utils.decode_range(ws['!ref']);
+  for (let f = rango.s.r; f <= rango.e.r; f++) {
+    for (let c = rango.s.c; c <= rango.e.c; c++) {
+      const ref = XLSX.utils.encode_cell({ r: f, c });
+      if (!ws[ref]) continue;
+      if (f === 0) ws[ref].s = estiloCabecera;
+      else if (zonasEnCols && zonasEnCols.includes(c) && ZONAS[ws[ref].v]) ws[ref].s = estiloZona(ws[ref].v);
+      else ws[ref].s = estiloCelda;
+    }
+  }
+  ws['!cols'] = anchos.map(w => ({ wch: w }));
+  ws['!rows'] = [{ hpt: 26 }];
+  return ws;
+};
+
+const filasMapaRiesgos = (riesgosCalc) => {
+  const cab = ['Código', 'Proceso', 'Tipo', 'Descripción del riesgo', 'Causas', 'Consecuencias',
+    'Probabilidad inherente', 'Impacto inherente', 'Zona inherente', 'N° de controles',
+    'Controles (resumen)', 'Probabilidad residual', 'Impacto residual', 'Zona residual',
+    'Tratamiento', 'Acciones del plan', 'Acciones cumplidas', 'Responsable', 'Estado', 'Última actualización'];
+  const filas = riesgosCalc.map(r => {
+    const ctr = (r.controles || []).map(c => `${c.descripcion} [${c.tipo} · ${c.implementacion} · ${valoracionControl(c)}%]`).join('\n');
+    const plan = (r.plan || []).map(a => `${a.descripcion} (${a.responsable || 's/r'} · ${formatearFecha(a.fecha)} · ${a.estado})`).join('\n');
+    const pI = NIVELES_PROBABILIDAD_DEFAULT[r.probabilidad - 1], iI = NIVELES_IMPACTO_DEFAULT[r.impacto - 1];
+    const pR = NIVELES_PROBABILIDAD_DEFAULT[r.calc.pRes - 1], iR = NIVELES_IMPACTO_DEFAULT[r.calc.iRes - 1];
+    return [r.codigo, r.proceso, r.tipo, r.nombre, r.causas || '', r.consecuencias || '',
+      `${r.probabilidad} · ${pI ? pI.etiqueta : ''}`, `${r.impacto} · ${iI ? iI.etiqueta : ''}`, r.calc.zonaInherente,
+      (r.controles || []).length, ctr,
+      `${r.calc.pRes} · ${pR ? pR.etiqueta : ''}`, `${r.calc.iRes} · ${iR ? iR.etiqueta : ''}`, r.calc.zonaResidual,
+      r.tratamiento || '', (r.plan || []).length, (r.plan || []).filter(a => a.estado === 'Cumplida').length,
+      r.responsable || '', r.estado, formatearFecha((r.actualizadoEn || '').slice(0, 10))];
+  });
+  return [cab, ...filas];
+};
+
+const exportarExcel = (entidad, riesgosCalc, avisar) => {
+  const nombre = `mapa_riesgos_${(entidad.sigla || 'ENT').toLowerCase()}_${hoyISO()}`;
+  const lista = ordenarRiesgos(riesgosCalc);
+  try {
+    if (typeof XLSX === 'undefined') throw new Error('XLSX no disponible');
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, hojaDesdeMatriz(filasMapaRiesgos(lista),
+      [12, 18, 16, 46, 34, 34, 14, 14, 12, 8, 50, 14, 14, 12, 20, 44, 10, 20, 12, 14], [8, 13]), 'Mapa de Riesgos');
+
+    const filasCtr = [['Código del riesgo', 'Control', 'Tipo', 'Implementación', 'Valoración %', 'Responsable', 'Documentación', 'Frecuencia', 'Evidencia']];
+    lista.forEach(r => (r.controles || []).forEach(c => filasCtr.push([
+      r.codigo, c.descripcion, c.tipo, c.implementacion, valoracionControl(c),
+      c.responsable || '', c.documentacion || '', c.frecuencia || '', c.evidencia || ''])));
+    XLSX.utils.book_append_sheet(wb, hojaDesdeMatriz(filasCtr, [12, 52, 12, 14, 11, 22, 14, 12, 12]), 'Controles');
+
+    const filasSeg = [['Código del riesgo', 'Fecha', 'Periodo', 'Eficacia', 'Observación', 'Evidencia', 'Registró']];
+    lista.forEach(r => (r.seguimientos || []).forEach(s => filasSeg.push([
+      r.codigo, formatearFecha(s.fecha), s.periodo || '', s.eficacia || '', s.observacion || '', s.evidencia || '', s.usuario || ''])));
+    XLSX.utils.book_append_sheet(wb, hojaDesdeMatriz(filasSeg, [12, 11, 9, 16, 56, 28, 12]), 'Seguimientos');
+
+    XLSX.writeFile(wb, nombre + '.xlsx');
+    avisar('Excel exportado: ' + lista.length + ' riesgos');
+  } catch (e) {
+    /* Plan B: CSV con BOM y punto y coma (Excel es-CO) */
+    console.warn('Exportación XLSX falló, se usa CSV:', e);
+    const filas = filasMapaRiesgos(lista);
+    const csv = '\ufeff' + filas.map(f => f.map(v => '"' + String(v ?? '').replace(/"/g, '""') + '"').join(';')).join('\r\n');
+    descargarBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), nombre + '.csv');
+    avisar('No cargó la librería de Excel: se exportó CSV', 'info');
+  }
+};
+
+const CABECERAS_PLANTILLA = ['Código', 'Proceso', 'Tipo', 'Descripción del riesgo', 'Causas (una por línea)',
+  'Consecuencias (una por línea)', 'Probabilidad (1-5)', 'Impacto (1-5)', 'Tratamiento', 'Responsable'];
+
+const descargarPlantilla = (entidad, avisar) => {
+  try {
+    if (typeof XLSX === 'undefined') throw new Error('XLSX no disponible');
+    const wb = XLSX.utils.book_new();
+    const ejemplo = ['R-' + (entidad.sigla || 'ENT') + '-101', (entidad.procesos || [])[0] || 'Proceso',
+      'Gestión', 'Descripción del posible evento y su efecto…', 'Causa 1\nCausa 2', 'Consecuencia 1', '3', '4', 'Reducir (mitigar)', 'Nombre del responsable'];
+    XLSX.utils.book_append_sheet(wb, hojaDesdeMatriz([CABECERAS_PLANTILLA, ejemplo],
+      [14, 20, 18, 46, 34, 34, 16, 12, 20, 22]), 'Plantilla');
+    const guia = [['Instrucciones'],
+      ['· Diligencia una fila por riesgo y conserva los encabezados.'],
+      ['· Tipo: ' + TIPOS_RIESGO.join(' / ') + '.'],
+      ['· Probabilidad e impacto: números de 1 a 5 según la guía DAFP.'],
+      ['· Los controles, planes y seguimientos se registran luego dentro de la aplicación.'],
+      ['· Importa este archivo desde la pestaña Riesgos → Importar.']];
+    XLSX.utils.book_append_sheet(wb, hojaDesdeMatriz(guia, [95]), 'Instrucciones');
+    XLSX.writeFile(wb, 'plantilla_riesgos_' + (entidad.sigla || 'ENT').toLowerCase() + '.xlsx');
+  } catch (e) {
+    avisar('La librería de Excel no está disponible para generar la plantilla', 'error');
+  }
+};
+
+/* Lee la primera hoja del archivo y devuelve { listos, omitidos } */
+const leerImportacion = async (archivo, entidad, codigosExistentes) => {
+  if (typeof XLSX === 'undefined') throw new Error('La librería de Excel no cargó; verifica la conexión.');
+  const wb = XLSX.read(await archivo.arrayBuffer(), { type: 'array' });
+  const hoja = wb.Sheets[wb.SheetNames[0]];
+  const filas = XLSX.utils.sheet_to_json(hoja, { defval: '' });
+  const clave = (t) => quitarTildes(t).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const buscar = (fila, ...nombres) => {
+    const mapa = {};
+    Object.keys(fila).forEach(k => { mapa[clave(k)] = fila[k]; });
+    for (const n of nombres) { const v = mapa[clave(n)]; if (v !== undefined && v !== '') return v; }
+    return '';
+  };
+  const listos = [], omitidos = [];
+  const vistos = new Set(codigosExistentes.map(c => String(c).toUpperCase()));
+  filas.forEach((fila, idx) => {
+    const nFila = idx + 2;
+    const codigo = String(buscar(fila, 'Código', 'Codigo')).trim().toUpperCase();
+    const nombre = String(buscar(fila, 'Descripción del riesgo', 'Descripcion del riesgo', 'Riesgo', 'Nombre')).trim();
+    if (!codigo && !nombre) return; // fila vacía
+    if (!codigo) { omitidos.push({ fila: nFila, motivo: 'Sin código' }); return; }
+    if (!nombre) { omitidos.push({ fila: nFila, motivo: 'Sin descripción del riesgo' }); return; }
+    if (vistos.has(codigo)) { omitidos.push({ fila: nFila, motivo: 'Código repetido: ' + codigo }); return; }
+    let tipo = String(buscar(fila, 'Tipo')).trim();
+    tipo = TIPOS_RIESGO.find(t => quitarTildes(t).toLowerCase() === quitarTildes(tipo).toLowerCase()) || 'Gestión';
+    const num = (v, min, max) => Math.min(max, Math.max(min, parseInt(v, 10) || min));
+    let probabilidad = num(buscar(fila, 'Probabilidad (1-5)', 'Probabilidad'), 1, 5);
+    let impacto = num(buscar(fila, 'Impacto (1-5)', 'Impacto'), 1, 5);
+    if (tipo === 'Corrupción' && impacto < 3) impacto = 3;
+    let tratamiento = String(buscar(fila, 'Tratamiento')).trim();
+    tratamiento = tratamientosPara(tipo).find(t => quitarTildes(t).toLowerCase().startsWith(quitarTildes(tratamiento).toLowerCase().slice(0, 6)) && tratamiento) || 'Reducir (mitigar)';
+    vistos.add(codigo);
+    listos.push({
+      codigo, nombre, tipo, probabilidad, impacto, tratamiento,
+      proceso: String(buscar(fila, 'Proceso')).trim() || ((entidad.procesos || [])[0] || 'General'),
+      causas: String(buscar(fila, 'Causas (una por línea)', 'Causas')).trim(),
+      consecuencias: String(buscar(fila, 'Consecuencias (una por línea)', 'Consecuencias')).trim(),
+      responsable: String(buscar(fila, 'Responsable')).trim(),
+      estado: 'Activo', controles: [], plan: [], seguimientos: []
+    });
+  });
+  return { listos, omitidos };
+};
+
+/* ===== 3.5 Componentes básicos ===== */
+
+const CLS_INPUT = 'w-full rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-2 text-sm focus:border-tinta focus:outline-none';
+const CLS_ETIQUETA = 'block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1';
+const CLS_BOTON = 'inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-semibold transition-colors focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed';
+const CLS_BOTON_PRIMARIO = CLS_BOTON + ' bg-tinta text-white hover:bg-tinta-claro';
+const CLS_BOTON_SECUNDARIO = CLS_BOTON + ' border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700';
+const CLS_BOTON_PELIGRO = CLS_BOTON + ' bg-red-700 text-white hover:bg-red-800';
+
+const TituloSeccion = ({ children }) => (
+  <h3 className="border-l-4 border-tinta pl-3 text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">{children}</h3>
+);
+
+const ChipZona = ({ zona, grande }) => {
+  const z = ZONAS[zona] || ZONAS.Bajo;
+  return (
+    <span className={'inline-flex items-center justify-center rounded-full font-semibold ' +
+        (grande ? 'px-3 py-1 text-sm ' : 'px-2 py-0.5 text-[11px] ') +
+        (z.textoOscuro ? 'text-slate-900' : 'text-white')}
+      style={{ backgroundColor: z.color }}>
+      {zona}
+    </span>
+  );
+};
+
+const ESTILOS_ETIQUETA = {
+  'Gestión': 'bg-tinta-tenue text-tinta dark:bg-slate-700 dark:text-slate-200',
+  'Corrupción': 'bg-red-50 text-red-700 border border-red-200 dark:bg-red-950 dark:text-red-300 dark:border-red-800',
+  'Seguridad de la información': 'bg-cyan-50 text-cyan-800 border border-cyan-200 dark:bg-cyan-950 dark:text-cyan-300 dark:border-cyan-800',
+  'Activo': 'border border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-400',
+  'Materializado': 'bg-red-700 text-white',
+  'Cerrado': 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300',
+  'Eficaz': 'border border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-400',
+  'Con observaciones': 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
+  'Ineficaz': 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
+  'Pendiente': 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300',
+  'En curso': 'bg-tinta-tenue text-tinta dark:bg-slate-700 dark:text-slate-200',
+  'Cumplida': 'border border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-400',
+  'Vencida': 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
+  'Inactivo': 'bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400'
+};
+const Etiqueta = ({ texto }) => (
+  <span className={'inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap ' + (ESTILOS_ETIQUETA[texto] || 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300')}>{texto}</span>
+);
+
+/* Avisos flotantes (toasts) */
+const Avisos = ({ avisos }) => (
+  <div className="fixed bottom-4 right-4 z-[70] flex w-72 flex-col gap-2" role="status" aria-live="polite">
+    {avisos.map(a => (
+      <div key={a.id} className={'animar-subir rounded-lg px-4 py-3 text-sm font-medium text-white shadow-lg ' +
+        (a.tipo === 'error' ? 'bg-red-700' : a.tipo === 'info' ? 'bg-tinta-claro' : 'bg-emerald-700')}>
+        {a.texto}
+      </div>
+    ))}
+  </div>
+);
+
+/* Ventana modal genérica. No se cierra si el clic empezó dentro (p. ej. al
+   seleccionar texto y soltar sobre el fondo): se compara dónde bajó el mouse. */
+const Ventana = ({ titulo, subtitulo, ancho, alCerrar, children, pie }) => {
+  const bajoEnFondo = useRef(false);
+  return (
+    <div className="animar-aparecer fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 p-3 sm:p-6"
+      role="dialog" aria-modal="true" aria-label={titulo}
+      onMouseDown={e => { bajoEnFondo.current = e.target === e.currentTarget; }}
+      onMouseUp={e => { if (bajoEnFondo.current && e.target === e.currentTarget) alCerrar(); bajoEnFondo.current = false; }}>
+      <div className={'animar-subir mx-auto my-4 w-full rounded-xl bg-white shadow-xl dark:bg-slate-900 ' + (ancho || 'max-w-2xl')}>
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-3.5 dark:border-slate-700">
+          <div>
+            <h2 className="font-display text-lg font-semibold text-tinta dark:text-slate-100">{titulo}</h2>
+            {subtitulo && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{subtitulo}</p>}
+          </div>
+          <button onClick={alCerrar} aria-label="Cerrar"
+            className="rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800">
+            <IcoCerrar className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
+        {pie && <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-slate-700">{pie}</div>}
+      </div>
+    </div>
+  );
+};
+
+const ModalConfirmar = ({ props, alCerrar }) => (
+  <Ventana titulo={props.titulo || 'Confirmar'} ancho="max-w-md" alCerrar={alCerrar}
+    pie={<>
+      <button className={CLS_BOTON_SECUNDARIO} onClick={alCerrar}>Cancelar</button>
+      <button className={CLS_BOTON_PELIGRO} onClick={() => { alCerrar(); props.alConfirmar(); }}>
+        {props.textoConfirmar || 'Eliminar'}
+      </button>
+    </>}>
+    <p className="text-sm text-slate-600 dark:text-slate-300">{props.mensaje}</p>
+  </Ventana>
+);
+
+/* ===== 3.6 Pantallas de acceso ===== */
+
+const MarcoAcceso = ({ children, anchoMax }) => (
+  <div className="flex min-h-screen items-center justify-center p-4">
+    <div className={'w-full animar-subir ' + (anchoMax || 'max-w-md')}>
+      <div className="mb-6 flex flex-col items-center gap-2 text-center">
+        <LogoMatriz className="h-14 w-14" />
+        <h1 className="font-display text-2xl font-bold text-tinta dark:text-slate-100">Matriz de Riesgos MIPG</h1>
+        <p className="text-sm text-slate-500 dark:text-slate-400">Administración del riesgo · metodología DAFP</p>
+      </div>
+      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+        {children}
+      </div>
+    </div>
+  </div>
+);
+
+/* Se muestra cuando el archivo aún no tiene configuración de Firebase */
+const PantallaConfiguracion = ({ errorInicio, alEntrarDemo }) => (
+  <MarcoAcceso anchoMax="max-w-lg">
+    <h2 className="font-display text-lg font-semibold text-slate-800 dark:text-slate-100">Conectar la aplicación</h2>
+    {errorInicio ? (
+      <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+        <IcoAlerta className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>No fue posible conectar con Firebase: {errorInicio}. Revisa la configuración pegada en el archivo y que la autenticación anónima esté activa.</span>
+      </div>
+    ) : (
+      <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+        Este archivo todavía no tiene las claves de un proyecto de Firebase. Para dejarlo operativo:
+      </p>
+    )}
+    <ol className="mt-4 space-y-3 text-sm text-slate-600 dark:text-slate-300">
+      <li className="flex gap-3"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-tinta text-xs font-bold text-white">1</span>
+        <span>Crea un proyecto en la consola de Firebase, activa <strong>Firestore</strong> y la autenticación <strong>anónima</strong>.</span></li>
+      <li className="flex gap-3"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-tinta text-xs font-bold text-white">2</span>
+        <span>Pega el objeto <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">firebaseConfig</code> en la sección <strong>1. CONFIGURACIÓN</strong> de este archivo HTML.</span></li>
+      <li className="flex gap-3"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-tinta text-xs font-bold text-white">3</span>
+        <span>Publica las reglas de Firestore incluidas en el comentario inicial del archivo.</span></li>
+    </ol>
+    <div className="mt-6 border-t border-slate-200 pt-4 dark:border-slate-700">
+      <button className={CLS_BOTON_PRIMARIO + ' w-full justify-center'} onClick={alEntrarDemo}>
+        Explorar en modo demostración
+      </button>
+      <p className="mt-2 text-center text-xs text-slate-500 dark:text-slate-400">
+        Datos de ejemplo en memoria: nada se guarda al recargar la página.
+      </p>
+    </div>
+  </MarcoAcceso>
+);
+
+const PantallaAcceso = ({ alIngresar, modoDemo }) => {
+  const [usuario, setUsuario] = useState(modoDemo ? 'admin' : '');
+  const [clave, setClave] = useState(modoDemo ? 'admin' : '');
+  const [error, setError] = useState('');
+  const [cargando, setCargando] = useState(false);
+
+  const intentar = async () => {
+    if (cargando) return;
+    if (!usuario.trim() || !clave) { setError('Escribe el usuario y la clave.'); return; }
+    setCargando(true); setError('');
+    try {
+      const u = await DB.buscarUsuarioPorLogin(usuario);
+      const hash = await window.calcularHashClave(usuario, clave);
+      if (!u || u.claveHash !== hash) { setError('Usuario o clave incorrectos.'); return; }
+      if (u.activo === false) { setError('El usuario está inactivo. Contacta a la administración.'); return; }
+      await alIngresar(u);
+    } catch (e) {
+      console.error(e);
+      setError('No fue posible validar el ingreso. Revisa la conexión e intenta de nuevo.');
+    } finally { setCargando(false); }
+  };
+  const conEnter = (e) => { if (e.key === 'Enter') intentar(); };
+
+  return (
+    <MarcoAcceso>
+      <h2 className="font-display text-lg font-semibold text-slate-800 dark:text-slate-100">Ingresar</h2>
+      {modoDemo && (
+        <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          Modo demostración · usuario <strong>admin</strong>, clave <strong>admin</strong>
+        </p>
+      )}
+      <div className="mt-4 space-y-4">
+        <div>
+          <label htmlFor="campo-usuario" className={CLS_ETIQUETA}>Usuario</label>
+          <input id="campo-usuario" className={CLS_INPUT} value={usuario} autoFocus={!modoDemo}
+            autoComplete="username" onChange={e => setUsuario(e.target.value)} onKeyDown={conEnter} />
+        </div>
+        <div>
+          <label htmlFor="campo-clave" className={CLS_ETIQUETA}>Clave</label>
+          <input id="campo-clave" type="password" className={CLS_INPUT} value={clave}
+            autoComplete="current-password" onChange={e => setClave(e.target.value)} onKeyDown={conEnter} />
+        </div>
+        {error && <p className="text-sm font-medium text-red-700 dark:text-red-400" role="alert">{error}</p>}
+        <button className={CLS_BOTON_PRIMARIO + ' w-full justify-center'} onClick={intentar} disabled={cargando}>
+          {cargando ? 'Validando…' : 'Ingresar'}
+        </button>
+      </div>
+    </MarcoAcceso>
+  );
+};
+
+/* Primer uso con Firebase vacío: crear la cuenta de administración */
+const PantallaBootstrap = ({ alCrear }) => {
+  const [d, setD] = useState({ nombre: '', usuario: '', clave: '', clave2: '' });
+  const [error, setError] = useState('');
+  const [cargando, setCargando] = useState(false);
+  const campo = (k) => (e) => setD({ ...d, [k]: e.target.value });
+
+  const crear = async () => {
+    if (cargando) return;
+    const usuario = d.usuario.trim().toLowerCase();
+    if (!d.nombre.trim() || !usuario || !d.clave) { setError('Completa todos los campos.'); return; }
+    if (!/^[a-z0-9._-]{3,}$/.test(usuario)) { setError('El usuario debe tener mínimo 3 caracteres, sin espacios (letras, números, punto, guion).'); return; }
+    if (d.clave.length < 4) { setError('La clave debe tener al menos 4 caracteres.'); return; }
+    if (d.clave !== d.clave2) { setError('Las claves no coinciden.'); return; }
+    setCargando(true); setError('');
+    try {
+      const claveHash = await window.calcularHashClave(usuario, d.clave);
+      const datos = { usuario, nombre: d.nombre.trim(), rol: 'admin', entidades: 'todas', activo: true, claveHash, creadoEn: new Date().toISOString() };
+      const id = await DB.crearUsuario(datos);
+      await alCrear({ id, ...datos });
+    } catch (e) {
+      console.error(e);
+      setError('No fue posible crear la cuenta. Revisa las reglas de Firestore.');
+      setCargando(false);
+    }
+  };
+  const conEnter = (e) => { if (e.key === 'Enter') crear(); };
+
+  return (
+    <MarcoAcceso>
+      <h2 className="font-display text-lg font-semibold text-slate-800 dark:text-slate-100">Primer uso</h2>
+      <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">La base de datos está vacía. Crea la cuenta de administración inicial.</p>
+      <div className="mt-4 space-y-4">
+        <div>
+          <label htmlFor="bs-nombre" className={CLS_ETIQUETA}>Nombre completo</label>
+          <input id="bs-nombre" className={CLS_INPUT} value={d.nombre} autoFocus onChange={campo('nombre')} onKeyDown={conEnter} />
+        </div>
+        <div>
+          <label htmlFor="bs-usuario" className={CLS_ETIQUETA}>Usuario de ingreso</label>
+          <input id="bs-usuario" className={CLS_INPUT} value={d.usuario} onChange={campo('usuario')} onKeyDown={conEnter} />
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor="bs-clave" className={CLS_ETIQUETA}>Clave</label>
+            <input id="bs-clave" type="password" className={CLS_INPUT} value={d.clave} onChange={campo('clave')} onKeyDown={conEnter} />
+          </div>
+          <div>
+            <label htmlFor="bs-clave2" className={CLS_ETIQUETA}>Repetir clave</label>
+            <input id="bs-clave2" type="password" className={CLS_INPUT} value={d.clave2} onChange={campo('clave2')} onKeyDown={conEnter} />
+          </div>
+        </div>
+        {error && <p className="text-sm font-medium text-red-700 dark:text-red-400" role="alert">{error}</p>}
+        <button className={CLS_BOTON_PRIMARIO + ' w-full justify-center'} onClick={crear} disabled={cargando}>
+          {cargando ? 'Creando…' : 'Crear cuenta y continuar'}
+        </button>
+      </div>
+    </MarcoAcceso>
+  );
+};
+
+const SelectorEntidad = ({ usuario, entidades, alElegir, alNuevaEntidad, alSalir, esAdmin }) => (
+  <MarcoAcceso anchoMax="max-w-xl">
+    <div className="flex items-center justify-between gap-2">
+      <h2 className="font-display text-lg font-semibold text-slate-800 dark:text-slate-100">Elegir entidad</h2>
+      <button className="text-xs font-semibold text-slate-500 hover:text-tinta dark:text-slate-400" onClick={alSalir}>Salir</button>
+    </div>
+    <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Hola, {usuario.nombre}. ¿Con qué entidad vas a trabajar?</p>
+
+    {entidades.length === 0 ? (
+      <div className="mt-5 rounded-lg border border-dashed border-slate-300 p-6 text-center dark:border-slate-600">
+        {esAdmin ? (
+          <>
+            <p className="text-sm text-slate-600 dark:text-slate-300">Aún no hay entidades registradas.</p>
+            <button className={CLS_BOTON_PRIMARIO + ' mt-3'} onClick={alNuevaEntidad}><IcoMas /> Crear la primera entidad</button>
+          </>
+        ) : (
+          <p className="text-sm text-slate-600 dark:text-slate-300">No tienes entidades asignadas. Pide a la administración que te asigne una.</p>
+        )}
+      </div>
+    ) : (
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {entidades.map(e => (
+          <button key={e.id} onClick={() => alElegir(e)}
+            className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3 text-left transition-colors hover:border-tinta hover:bg-tinta-tenue dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-tinta font-display text-sm font-bold text-white">
+              {(e.sigla || 'E').slice(0, 4)}
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{e.nombre}</span>
+              <span className="block text-xs text-slate-500 dark:text-slate-400">
+                {e.nit ? 'NIT ' + e.nit + ' · ' : ''}{(e.procesos || []).length} procesos
+              </span>
+            </span>
+          </button>
+        ))}
+      </div>
+    )}
+    {esAdmin && entidades.length > 0 && (
+      <button className={CLS_BOTON_SECUNDARIO + ' mt-4'} onClick={alNuevaEntidad}><IcoMas /> Nueva entidad</button>
+    )}
+  </MarcoAcceso>
+);
+
+/* ===== 3.7 Pestaña Panel ===== */
+
+const fechaMasDias = (n) => {
+  const d = new Date(); d.setDate(d.getDate() + n);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+};
+
+const TarjetaKpi = ({ etiqueta, valor, detalle, alerta }) => (
+  <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+    <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{etiqueta}</p>
+    <p className={'mt-1 font-display text-3xl font-bold ' + (alerta ? 'text-red-700 dark:text-red-400' : 'text-tinta dark:text-slate-100')}>{valor}</p>
+    {detalle && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{detalle}</p>}
+  </div>
+);
+
+const Dona = ({ conteos, total }) => {
+  const R = 40, C = 2 * Math.PI * R;
+  let acumulado = 0;
+  const segmentos = NOMBRES_ZONAS.map(z => {
+    const n = conteos[z] || 0;
+    const frac = total ? n / total : 0;
+    const s = { zona: z, n, frac, offset: acumulado };
+    acumulado += frac;
+    return s;
+  });
+  return (
+    <div className="flex flex-wrap items-center justify-center gap-6">
+      <div className="relative h-36 w-36">
+        <svg viewBox="0 0 100 100" className="h-36 w-36 -rotate-90">
+          <circle cx="50" cy="50" r={R} fill="none" stroke="#E2E8F0" strokeWidth="14" />
+          {segmentos.filter(s => s.n > 0).map(s => (
+            <circle key={s.zona} cx="50" cy="50" r={R} fill="none" stroke={ZONAS[s.zona].color}
+              strokeWidth="14" strokeDasharray={(s.frac * C) + ' ' + C} strokeDashoffset={-s.offset * C} />
+          ))}
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <span className="font-display text-2xl font-bold text-tinta dark:text-slate-100">{total}</span>
+          <span className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">riesgos</span>
+        </div>
+      </div>
+      <ul className="space-y-1.5 text-sm">
+        {segmentos.map(s => (
+          <li key={s.zona} className="flex items-center gap-2">
+            <span className="h-3 w-3 rounded-sm" style={{ backgroundColor: ZONAS[s.zona].color }} aria-hidden="true"></span>
+            <span className="w-20 text-slate-600 dark:text-slate-300">{s.zona}</span>
+            <span className="font-semibold text-slate-800 dark:text-slate-100">{s.n}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+};
+
+const BarrasProceso = ({ riesgosCalc }) => {
+  const conteo = {};
+  riesgosCalc.forEach(r => { const p = r.proceso || 'Sin proceso'; conteo[p] = (conteo[p] || 0) + 1; });
+  const filas = Object.entries(conteo).sort((a, b) => b[1] - a[1]);
+  const max = filas.length ? filas[0][1] : 1;
+  if (!filas.length) return <p className="text-sm text-slate-500 dark:text-slate-400">Sin datos aún.</p>;
+  return (
+    <ul className="space-y-2">
+      {filas.map(([proceso, n]) => (
+        <li key={proceso} className="flex items-center gap-3 text-sm">
+          <span className="w-40 shrink-0 truncate text-slate-600 dark:text-slate-300" title={proceso}>{proceso}</span>
+          <span className="h-5 flex-1 overflow-hidden rounded bg-slate-100 dark:bg-slate-800">
+            <span className="block h-full rounded bg-tinta dark:bg-tinta-claro" style={{ width: Math.max(4, (n / max) * 100) + '%' }}></span>
+          </span>
+          <span className="w-6 text-right font-semibold text-slate-800 dark:text-slate-100">{n}</span>
+        </li>
+      ))}
+    </ul>
+  );
+};
+
+const Panel = ({ riesgosCalc, abrirModal, puedeEditar }) => {
+  const noCerrados = riesgosCalc.filter(r => r.estado !== 'Cerrado');
+  const criticos = ordenarRiesgos(noCerrados.filter(r => ['Alto', 'Extremo'].includes(r.calc.zonaResidual)));
+  const materializados = riesgosCalc.filter(r => r.estado === 'Materializado').length;
+
+  const acciones = [];
+  noCerrados.forEach(r => (r.plan || []).forEach(a => acciones.push({ r, a })));
+  const vencidas = acciones.filter(x => accionVencida(x.a));
+  const limite30 = fechaMasDias(30);
+  const proximas = acciones
+    .filter(x => x.a.estado !== 'Cumplida' && x.a.fecha && x.a.fecha <= limite30)
+    .sort((x, y) => String(x.a.fecha).localeCompare(String(y.a.fecha)))
+    .slice(0, 8);
+
+  const periodo = periodoActual();
+  const segsPeriodo = riesgosCalc.reduce((n, r) => n + (r.seguimientos || []).filter(s => s.periodo === periodo).length, 0);
+
+  const conteosZona = {};
+  noCerrados.forEach(r => { conteosZona[r.calc.zonaResidual] = (conteosZona[r.calc.zonaResidual] || 0) + 1; });
+
+  if (!riesgosCalc.length) {
+    return (
+      <div className="animar-subir rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center dark:border-slate-600 dark:bg-slate-900" role="status">
+        <LogoMatriz className="mx-auto h-12 w-12 opacity-80" />
+        <h3 className="mt-3 font-display text-lg font-semibold text-slate-800 dark:text-slate-100">La matriz está vacía</h3>
+        <p className="mx-auto mt-1 max-w-md text-sm text-slate-500 dark:text-slate-400">
+          Registra el primer riesgo o importa el mapa de riesgos existente desde un archivo de Excel en la pestaña Riesgos.
+        </p>
+        {puedeEditar && (
+          <button className={CLS_BOTON_PRIMARIO + ' mt-4'} onClick={() => abrirModal({ tipo: 'riesgo', props: {} })}>
+            <IcoMas /> Registrar el primer riesgo
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="animar-subir space-y-5">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <TarjetaKpi etiqueta="Riesgos activos" valor={noCerrados.length}
+          detalle={materializados ? materializados + ' materializado(s)' : 'Sin materializaciones'} alerta={materializados > 0} />
+        <TarjetaKpi etiqueta="En zona alta o extrema" valor={criticos.length} detalle="Riesgo residual" alerta={criticos.length > 0} />
+        <TarjetaKpi etiqueta="Acciones vencidas" valor={vencidas.length} detalle="Del plan de acción" alerta={vencidas.length > 0} />
+        <TarjetaKpi etiqueta={'Seguimientos ' + periodo} valor={segsPeriodo} detalle="Registrados en el periodo" />
+      </div>
+
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <TituloSeccion>Mapa de calor residual</TituloSeccion>
+            <span className="text-xs text-slate-400">Toca una celda para ver sus riesgos</span>
+          </div>
+          <MapaCalor riesgosCalc={noCerrados} vista="residual" tam="sm"
+            alClicCelda={(p, i) => abrirModal({ tipo: 'celda', props: { p, i, vista: 'residual' } })} />
+        </section>
+
+        <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+          <div className="mb-3"><TituloSeccion>Distribución por zona residual</TituloSeccion></div>
+          <Dona conteos={conteosZona} total={noCerrados.length} />
+        </section>
+      </div>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div className="mb-3"><TituloSeccion>Riesgos por proceso</TituloSeccion></div>
+        <BarrasProceso riesgosCalc={noCerrados} />
+      </section>
+
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+          <div className="mb-3"><TituloSeccion>Prioridad: zona alta y extrema</TituloSeccion></div>
+          {criticos.length ? (
+            <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+              {criticos.slice(0, 6).map(r => (
+                <li key={r.id}>
+                  <button className="flex w-full items-center gap-3 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800"
+                    onClick={() => abrirModal({ tipo: 'ver', props: { riesgoId: r.id } })}>
+                    <span className="w-24 shrink-0 text-xs font-semibold text-slate-500 dark:text-slate-400">{r.codigo}</span>
+                    <span className="linea-2 flex-1 text-sm text-slate-700 dark:text-slate-200">{r.nombre}</span>
+                    <ChipZona zona={r.calc.zonaResidual} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="text-sm text-slate-500 dark:text-slate-400">Ningún riesgo en zona alta o extrema. Buen trabajo.</p>}
+        </section>
+
+        <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+          <div className="mb-3"><TituloSeccion>Acciones por vencer (30 días)</TituloSeccion></div>
+          {proximas.length ? (
+            <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+              {proximas.map((x, i) => (
+                <li key={x.r.id + '-' + i} className="flex items-center gap-3 py-2">
+                  <span className={'w-20 shrink-0 text-xs font-semibold ' + (accionVencida(x.a) ? 'text-red-700 dark:text-red-400' : 'text-slate-500 dark:text-slate-400')}>
+                    {formatearFecha(x.a.fecha)}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="linea-2 block text-sm text-slate-700 dark:text-slate-200">{x.a.descripcion}</span>
+                    <span className="text-[11px] text-slate-400">{x.r.codigo}{x.a.responsable ? ' · ' + x.a.responsable : ''}</span>
+                  </span>
+                  {accionVencida(x.a) ? <Etiqueta texto="Vencida" /> : <Etiqueta texto={x.a.estado} />}
+                </li>
+              ))}
+            </ul>
+          ) : <p className="text-sm text-slate-500 dark:text-slate-400">Sin acciones próximas a vencer.</p>}
+        </section>
+      </div>
+    </div>
+  );
+};
+
+/* ===== 3.8 Pestaña Mapa de calor ===== */
+
+const posicionRiesgo = (r, vista) => vista === 'inherente'
+  ? { p: r.probabilidad || 1, i: r.tipo === 'Corrupción' ? Math.max(r.impacto || 1, 3) : (r.impacto || 1) }
+  : { p: r.calc.pRes, i: r.calc.iRes };
+
+/* Firma visual de la app: la matriz 5×5 DAFP con conteos vivos y celdas
+   accionables. Se usa grande en su pestaña y pequeña en el panel. */
+const MapaCalor = ({ riesgosCalc, vista, tam, alClicCelda }) => {
+  const grande = tam !== 'sm';
+  const conteos = {};
+  riesgosCalc.forEach(r => {
+    const { p, i } = posicionRiesgo(r, vista);
+    conteos[p + '-' + i] = (conteos[p + '-' + i] || 0) + 1;
+  });
+  const altoCelda = grande ? 'h-12 sm:h-16' : 'h-9';
+  const anchoEje = grande ? 'w-16 sm:w-20' : 'w-8';
+
+  return (
+    <div className={grande ? 'text-xs' : 'text-[10px]'}>
+      <div className="flex">
+        <div className="flex select-none items-center pr-1 text-[10px] font-bold uppercase tracking-widest text-slate-400"
+          style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
+          Probabilidad
+        </div>
+        <div className="min-w-0 flex-1">
+          {[5, 4, 3, 2, 1].map(p => (
+            <div key={p} className="mb-1 flex gap-1">
+              <div className={anchoEje + ' flex shrink-0 flex-col items-end justify-center pr-1 leading-tight'}>
+                <span className="font-bold text-slate-600 dark:text-slate-300">{p}</span>
+                {grande && <span className="hidden text-slate-400 sm:block">{NIVELES_PROBABILIDAD_DEFAULT[p - 1].etiqueta}</span>}
+              </div>
+              {[1, 2, 3, 4, 5].map(i => {
+                const zona = zonaDe(p, i);
+                const z = ZONAS[zona];
+                const n = conteos[p + '-' + i] || 0;
+                const puedeClic = n > 0 && !!alClicCelda;
+                return (
+                  <button key={i} type="button" disabled={!puedeClic}
+                    onClick={() => puedeClic && alClicCelda(p, i)}
+                    className={'celda-mapa flex flex-1 items-center justify-center rounded font-bold ' + altoCelda + (puedeClic ? '' : ' cursor-default')}
+                    style={{ backgroundColor: z.color, opacity: n ? 1 : 0.25, color: z.textoOscuro ? '#1E293B' : '#FFFFFF' }}
+                    aria-label={'Probabilidad ' + NIVELES_PROBABILIDAD_DEFAULT[p - 1].etiqueta + ' por impacto ' + NIVELES_IMPACTO_DEFAULT[i - 1].etiqueta + ': ' + n + ' riesgo(s), zona ' + zona}>
+                    {n ? (grande ? n : (n > 9 ? '9+' : n)) : ''}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+          <div className="flex gap-1">
+            <div className={anchoEje + ' shrink-0'}></div>
+            {[1, 2, 3, 4, 5].map(i => (
+              <div key={i} className="flex-1 text-center leading-tight">
+                <span className="font-bold text-slate-600 dark:text-slate-300">{i}</span>
+                {grande && <span className="hidden text-slate-400 sm:block">{NIVELES_IMPACTO_DEFAULT[i - 1].etiqueta}</span>}
+              </div>
+            ))}
+          </div>
+          <p className="mt-1 select-none text-center text-[10px] font-bold uppercase tracking-widest text-slate-400">Impacto</p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const MapaTab = ({ riesgosCalc, abrirModal }) => {
+  const [vista, setVista] = useState('residual');
+  const visibles = riesgosCalc.filter(r => r.estado !== 'Cerrado');
+  const conteosZona = {};
+  visibles.forEach(r => {
+    const { p, i } = posicionRiesgo(r, vista);
+    const zona = zonaDe(p, i);
+    conteosZona[zona] = (conteosZona[zona] || 0) + 1;
+  });
+
+  return (
+    <div className="animar-subir space-y-5">
+      <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5 dark:border-slate-700 dark:bg-slate-900">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <TituloSeccion>Mapa de calor · {vista === 'residual' ? 'riesgo residual' : 'riesgo inherente'}</TituloSeccion>
+          <div className="inline-flex rounded-lg border border-slate-300 p-0.5 dark:border-slate-600" role="group" aria-label="Cambiar vista del mapa">
+            {[['inherente', 'Inherente'], ['residual', 'Residual']].map(([v, nombre]) => (
+              <button key={v} onClick={() => setVista(v)}
+                className={'rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ' +
+                  (vista === v ? 'bg-tinta text-white' : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800')}>
+                {nombre}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <MapaCalor riesgosCalc={visibles} vista={vista} tam="lg"
+          alClicCelda={(p, i) => abrirModal({ tipo: 'celda', props: { p, i, vista } })} />
+
+        <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-slate-100 pt-3 text-xs dark:border-slate-800">
+          {NOMBRES_ZONAS.map(z => (
+            <span key={z} className="inline-flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+              <span className="h-3 w-3 rounded-sm" style={{ backgroundColor: ZONAS[z].color }} aria-hidden="true"></span>
+              {z}: <strong>{conteosZona[z] || 0}</strong>
+            </span>
+          ))}
+          <span className="text-slate-400">Los riesgos cerrados no se muestran.</span>
+        </div>
+      </section>
+
+      <details className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <summary className="cursor-pointer text-sm font-semibold text-tinta dark:text-slate-200">
+          Criterios DAFP de probabilidad e impacto
+        </summary>
+        <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {[['Probabilidad (frecuencia de la actividad)', NIVELES_PROBABILIDAD_DEFAULT],
+            ['Impacto (afectación económica o reputacional)', NIVELES_IMPACTO_DEFAULT]].map(([titulo, niveles]) => (
+            <div key={titulo}>
+              <h4 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{titulo}</h4>
+              <table className="w-full text-xs">
+                <tbody>
+                  {niveles.map(n => (
+                    <tr key={n.nivel} className="border-t border-slate-100 dark:border-slate-800">
+                      <td className="w-10 py-1.5 font-bold text-slate-700 dark:text-slate-200">{n.nivel}</td>
+                      <td className="w-24 py-1.5 font-semibold text-slate-600 dark:text-slate-300">{n.etiqueta}</td>
+                      <td className="w-12 py-1.5 text-slate-500">{n.pct}%</td>
+                      <td className="py-1.5 text-slate-500 dark:text-slate-400">{n.criterio}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
+      </details>
+    </div>
+  );
+};
+
+const ModalCelda = ({ props, alCerrar, ctx }) => {
+  const { p, i, vista } = props;
+  const lista = ordenarRiesgos(ctx.riesgosCalc.filter(r =>
+    r.estado !== 'Cerrado' &&
+    posicionRiesgo(r, vista).p === p && posicionRiesgo(r, vista).i === i));
+  const zona = zonaDe(p, i);
+  return (
+    <Ventana alCerrar={alCerrar}
+      titulo={'Probabilidad ' + NIVELES_PROBABILIDAD_DEFAULT[p - 1].etiqueta + ' · Impacto ' + NIVELES_IMPACTO_DEFAULT[i - 1].etiqueta}
+      subtitulo={(vista === 'residual' ? 'Riesgo residual · ' : 'Riesgo inherente · ') + lista.length + ' riesgo(s) en esta celda'}>
+      <div className="mb-3"><ChipZona zona={zona} grande /></div>
+      {lista.length ? (
+        <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+          {lista.map(r => (
+            <li key={r.id}>
+              <button className="flex w-full items-center gap-3 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800"
+                onClick={() => ctx.abrirModal({ tipo: 'ver', props: { riesgoId: r.id } })}>
+                <span className="w-24 shrink-0 text-xs font-semibold text-slate-500 dark:text-slate-400">{r.codigo}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="linea-2 block text-sm text-slate-700 dark:text-slate-200">{r.nombre}</span>
+                  <span className="text-[11px] text-slate-400">{r.proceso} · {r.tipo}</span>
+                </span>
+                <IcoOjo className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : <p className="text-sm text-slate-500">No hay riesgos en esta celda.</p>}
+    </Ventana>
+  );
+};
+
+/* ===== 3.9 Pestaña Riesgos ===== */
+
+const RiesgosTab = ({ riesgosCalc, ctx }) => {
+  const { entidad, abrirModal, avisar, puedeEditar, esAdmin, registrar, usuario } = ctx;
+  const [f, setF] = useState({ texto: '', proceso: '', tipo: '', zona: '', estado: '' });
+  const [importando, setImportando] = useState(false);
+  const refArchivo = useRef(null);
+  const ponF = (k) => (e) => setF({ ...f, [k]: e.target.value });
+
+  const filtrados = riesgosCalc.filter(r => {
+    if (f.texto) {
+      const t = quitarTildes(f.texto).toLowerCase();
+      const pajar = quitarTildes([r.codigo, r.nombre, r.causas, r.proceso, r.responsable].join(' ')).toLowerCase();
+      if (!pajar.includes(t)) return false;
+    }
+    if (f.proceso && r.proceso !== f.proceso) return false;
+    if (f.tipo && r.tipo !== f.tipo) return false;
+    if (f.zona && r.calc.zonaResidual !== f.zona) return false;
+    if (f.estado && r.estado !== f.estado) return false;
+    return true;
+  });
+  const ordenados = ordenarRiesgos(filtrados);
+
+  const importarArchivo = async (e) => {
+    const archivo = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!archivo) return;
+    setImportando(true);
+    try {
+      const { listos, omitidos } = await leerImportacion(archivo, entidad, riesgosCalc.map(r => r.codigo));
+      const ahora = new Date().toISOString();
+      for (const r of listos) {
+        await DB.crearRiesgo({ ...r, entidadId: entidad.id, creadoEn: ahora, actualizadoEn: ahora, creadoPor: usuario.usuario });
+      }
+      if (listos.length) registrar('Importó riesgos', '', listos.length + ' riesgo(s) desde Excel');
+      abrirModal({ tipo: 'importar-resumen', props: { creados: listos.length, omitidos } });
+    } catch (err) {
+      console.error(err);
+      avisar(err.message || 'No fue posible leer el archivo', 'error');
+    } finally { setImportando(false); }
+  };
+
+  const eliminar = (r) => abrirModal({
+    tipo: 'confirmar',
+    props: {
+      titulo: 'Eliminar riesgo',
+      mensaje: 'Se eliminará definitivamente el riesgo ' + r.codigo + ' con sus controles, plan y seguimientos. Esta acción no se puede deshacer.',
+      textoConfirmar: 'Eliminar riesgo',
+      alConfirmar: async () => {
+        try {
+          await DB.eliminarRiesgo(r.id);
+          registrar('Eliminó el riesgo', r.codigo, String(r.nombre || '').slice(0, 90));
+          avisar('Riesgo ' + r.codigo + ' eliminado');
+        } catch (e) { console.error(e); avisar('No fue posible eliminar el riesgo', 'error'); }
+      }
+    }
+  });
+
+  const claseIcono = 'rounded p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-tinta dark:text-slate-400 dark:hover:bg-slate-800';
+
+  return (
+    <div className="animar-subir space-y-4">
+      <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center gap-2">
+          <input aria-label="Buscar riesgos" placeholder="Buscar por código, descripción, causa o responsable…"
+            className={CLS_INPUT + ' min-w-[220px] flex-1'} value={f.texto} onChange={ponF('texto')} />
+          <select aria-label="Filtrar por proceso" className={CLS_INPUT + ' w-auto'} value={f.proceso} onChange={ponF('proceso')}>
+            <option value="">Todos los procesos</option>
+            {(entidad.procesos || []).map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <select aria-label="Filtrar por tipo" className={CLS_INPUT + ' w-auto'} value={f.tipo} onChange={ponF('tipo')}>
+            <option value="">Todos los tipos</option>
+            {TIPOS_RIESGO.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select aria-label="Filtrar por zona residual" className={CLS_INPUT + ' w-auto'} value={f.zona} onChange={ponF('zona')}>
+            <option value="">Toda zona residual</option>
+            {NOMBRES_ZONAS.map(z => <option key={z} value={z}>{z}</option>)}
+          </select>
+          <select aria-label="Filtrar por estado" className={CLS_INPUT + ' w-auto'} value={f.estado} onChange={ponF('estado')}>
+            <option value="">Todo estado</option>
+            {ESTADOS_RIESGO.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            {ordenados.length} de {riesgosCalc.length} riesgos · ordenados por criticidad residual
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button className={CLS_BOTON_SECUNDARIO} onClick={() => descargarPlantilla(entidad, avisar)}>
+              <IcoDescarga /> Plantilla
+            </button>
+            {puedeEditar && (
+              <>
+                <input ref={refArchivo} type="file" accept=".xlsx,.xls" className="hidden"
+                  aria-hidden="true" tabIndex={-1} onChange={importarArchivo} />
+                <button className={CLS_BOTON_SECUNDARIO} disabled={importando}
+                  onClick={() => refArchivo.current && refArchivo.current.click()}>
+                  <IcoSubida /> {importando ? 'Importando…' : 'Importar'}
+                </button>
+              </>
+            )}
+            <button className={CLS_BOTON_SECUNDARIO} onClick={() => exportarExcel(entidad, riesgosCalc, avisar)}>
+              <IcoDescarga /> Exportar Excel
+            </button>
+            {puedeEditar && (
+              <button className={CLS_BOTON_PRIMARIO} onClick={() => abrirModal({ tipo: 'riesgo', props: {} })}>
+                <IcoMas /> Nuevo riesgo
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {ordenados.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-400" role="status">
+          {riesgosCalc.length === 0
+            ? 'Aún no hay riesgos registrados en esta entidad.'
+            : 'Ningún riesgo coincide con los filtros aplicados.'}
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+          <table className="w-full min-w-[1020px] text-sm">
+            <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+              <tr>
+                <th className="col-fija z-10 bg-slate-50 px-3 py-2.5 dark:bg-slate-800">Código</th>
+                <th className="px-3 py-2.5">Riesgo</th>
+                <th className="px-3 py-2.5">Inherente</th>
+                <th className="px-3 py-2.5 text-center">Controles</th>
+                <th className="px-3 py-2.5">Residual</th>
+                <th className="px-3 py-2.5">Tratamiento</th>
+                <th className="px-3 py-2.5 text-center">Plan</th>
+                <th className="px-3 py-2.5">Estado</th>
+                <th className="px-3 py-2.5 text-right">Acciones</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {ordenados.map(r => {
+                const totalPlan = (r.plan || []).length;
+                const cumplidas = (r.plan || []).filter(a => a.estado === 'Cumplida').length;
+                const conVencidas = (r.plan || []).some(accionVencida);
+                return (
+                  <tr key={r.id} className="align-top hover:bg-slate-50/70 dark:hover:bg-slate-800/50">
+                    <td className="col-fija whitespace-nowrap bg-white px-3 py-2.5 text-xs font-bold text-slate-700 dark:bg-slate-900 dark:text-slate-200">{r.codigo}</td>
+                    <td className="min-w-[260px] px-3 py-2.5">
+                      <p className="linea-2 text-slate-700 dark:text-slate-200" title={r.nombre}>{r.nombre}</p>
+                      <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
+                        <span>{r.proceso}</span><Etiqueta texto={r.tipo} />
+                      </p>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <ChipZona zona={r.calc.zonaInherente} />
+                      <p className="mt-1 text-[11px] text-slate-400">P{r.probabilidad} · I{r.impacto}</p>
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      <span className="inline-flex h-6 min-w-[24px] items-center justify-center rounded-full bg-slate-100 px-1.5 text-xs font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                        {(r.controles || []).length}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <ChipZona zona={r.calc.zonaResidual} />
+                      <p className="mt-1 text-[11px] text-slate-400">P{r.calc.pRes} · I{r.calc.iRes}</p>
+                    </td>
+                    <td className="px-3 py-2.5 text-xs text-slate-600 dark:text-slate-300">{r.tratamiento || '—'}</td>
+                    <td className="px-3 py-2.5 text-center text-xs">
+                      {totalPlan ? (
+                        <span className={'inline-flex items-center gap-1 font-semibold ' + (conVencidas ? 'text-red-700 dark:text-red-400' : 'text-slate-600 dark:text-slate-300')}>
+                          {conVencidas && <IcoAlerta className="h-3.5 w-3.5" />}{cumplidas}/{totalPlan}
+                        </span>
+                      ) : <span className="text-slate-300 dark:text-slate-600">—</span>}
+                    </td>
+                    <td className="px-3 py-2.5"><Etiqueta texto={r.estado} /></td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex justify-end gap-0.5">
+                        <button className={claseIcono} aria-label={'Ver el riesgo ' + r.codigo}
+                          onClick={() => abrirModal({ tipo: 'ver', props: { riesgoId: r.id } })}><IcoOjo /></button>
+                        {puedeEditar && (
+                          <>
+                            <button className={claseIcono} aria-label={'Editar el riesgo ' + r.codigo}
+                              onClick={() => abrirModal({ tipo: 'riesgo', props: { riesgoId: r.id } })}><IcoLapiz /></button>
+                            <button className={claseIcono} aria-label={'Registrar seguimiento del riesgo ' + r.codigo}
+                              onClick={() => abrirModal({ tipo: 'seguimiento', props: { riesgoId: r.id } })}><IcoReloj /></button>
+                          </>
+                        )}
+                        {esAdmin && (
+                          <button className={claseIcono + ' hover:text-red-700'} aria-label={'Eliminar el riesgo ' + r.codigo}
+                            onClick={() => eliminar(r)}><IcoBasura /></button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ModalImportarResumen = ({ props, alCerrar }) => (
+  <Ventana titulo="Resultado de la importación" ancho="max-w-lg" alCerrar={alCerrar}
+    pie={<button className={CLS_BOTON_PRIMARIO} onClick={alCerrar}>Entendido</button>}>
+    <p className="text-sm text-slate-700 dark:text-slate-200">
+      Se crearon <strong>{props.creados}</strong> riesgo(s).
+      {props.omitidos.length > 0 && <> Se omitieron <strong>{props.omitidos.length}</strong> fila(s):</>}
+    </p>
+    {props.omitidos.length > 0 && (
+      <table className="mt-3 w-full text-xs">
+        <thead className="text-left text-slate-500"><tr><th className="py-1 pr-3">Fila</th><th className="py-1">Motivo</th></tr></thead>
+        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+          {props.omitidos.map((o, i) => (
+            <tr key={i}><td className="py-1.5 pr-3 font-semibold">{o.fila}</td><td className="py-1.5 text-slate-600 dark:text-slate-300">{o.motivo}</td></tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+  </Ventana>
+);
+
+/* Formatea porcentajes al estilo es-CO (coma decimal) */
+const pctCO = (n) => String(n).replace('.', ',') + '%';
+
+/* --- Formulario de creación / edición del riesgo --- */
+const ModalRiesgo = ({ props, alCerrar, ctx }) => {
+  const original = props.riesgoId ? ctx.riesgosCalc.find(r => r.id === props.riesgoId) : null;
+  const [b, setB] = useState(() => original ? clonar(original) : {
+    codigo: siguienteCodigo(ctx.riesgosCalc, ctx.entidad.sigla),
+    proceso: (ctx.entidad.procesos || [])[0] || '',
+    tipo: 'Gestión', nombre: '', causas: '', consecuencias: '',
+    probabilidad: 3, impacto: 3, controles: [], tratamiento: 'Reducir (mitigar)',
+    responsable: '', plan: [], estado: 'Activo'
+  });
+  const [error, setError] = useState('');
+  const [guardando, setGuardando] = useState(false);
+  const calc = useMemo(() => calcularResidual(b), [b]);
+  const pon = (k) => (e) => setB(prev => ({ ...prev, [k]: e.target.value }));
+
+  const cambiarTipo = (e) => {
+    const tipo = e.target.value;
+    setB(prev => ({
+      ...prev, tipo,
+      impacto: tipo === 'Corrupción' ? Math.max(+prev.impacto || 1, 3) : prev.impacto,
+      tratamiento: tratamientosPara(tipo).includes(prev.tratamiento) ? prev.tratamiento : 'Reducir (mitigar)'
+    }));
+  };
+
+  const editarControl = (control, indice) => ctx.abrirModal({
+    tipo: 'control',
+    props: {
+      control, indice,
+      alGuardar: (ctrl, idx) => setB(prev => {
+        const cs = [...(prev.controles || [])];
+        if (idx === null || idx === undefined) cs.push(ctrl); else cs[idx] = ctrl;
+        return { ...prev, controles: cs };
+      })
+    }
+  });
+  const quitarControl = (idx) => setB(prev => ({ ...prev, controles: prev.controles.filter((_, i) => i !== idx) }));
+
+  const ponAccion = (idx, k, v) => setB(prev => {
+    const plan = [...(prev.plan || [])]; plan[idx] = { ...plan[idx], [k]: v };
+    return { ...prev, plan };
+  });
+  const agregarAccion = () => setB(prev => ({ ...prev, plan: [...(prev.plan || []), { descripcion: '', responsable: '', fecha: '', estado: 'Pendiente' }] }));
+  const quitarAccion = (idx) => setB(prev => ({ ...prev, plan: prev.plan.filter((_, i) => i !== idx) }));
+
+  const guardar = async () => {
+    const codigo = String(b.codigo || '').trim().toUpperCase();
+    if (!codigo) { setError('El código es obligatorio.'); return; }
+    if (!b.proceso) { setError('Selecciona el proceso.'); return; }
+    if (!String(b.nombre || '').trim()) { setError('Describe el riesgo.'); return; }
+    if (ctx.riesgosCalc.some(r => r.codigo === codigo && r.id !== props.riesgoId)) {
+      setError('Ya existe un riesgo con el código ' + codigo + '.'); return;
+    }
+    setGuardando(true); setError('');
+    const comunes = {
+      codigo, proceso: b.proceso, tipo: b.tipo, nombre: String(b.nombre).trim(),
+      causas: b.causas || '', consecuencias: b.consecuencias || '',
+      probabilidad: +b.probabilidad || 1, impacto: +b.impacto || 1,
+      controles: b.controles || [], tratamiento: b.tratamiento || '',
+      responsable: b.responsable || '', estado: b.estado || 'Activo',
+      plan: (b.plan || []).filter(a => String(a.descripcion || '').trim()),
+      actualizadoEn: new Date().toISOString()
+    };
+    try {
+      if (original) {
+        await DB.actualizarRiesgo(original.id, comunes);
+        ctx.registrar('Actualizó el riesgo', codigo, resumirCambios(original, comunes));
+        ctx.avisar('Riesgo ' + codigo + ' actualizado');
+      } else {
+        await DB.crearRiesgo({
+          ...comunes, entidadId: ctx.entidad.id, seguimientos: [],
+          creadoEn: comunes.actualizadoEn, creadoPor: ctx.usuario.usuario
+        });
+        ctx.registrar('Creó el riesgo', codigo, comunes.nombre.slice(0, 90));
+        ctx.avisar('Riesgo ' + codigo + ' creado');
+      }
+      alCerrar();
+    } catch (e) {
+      console.error(e);
+      setError('No fue posible guardar. Revisa la conexión e intenta de nuevo.');
+      setGuardando(false);
+    }
+  };
+
+  return (
+    <Ventana ancho="max-w-3xl" alCerrar={alCerrar}
+      titulo={original ? 'Editar riesgo ' + original.codigo : 'Nuevo riesgo'}
+      subtitulo={ctx.entidad.nombre}
+      pie={<>
+        {error && <p className="mr-auto self-center text-sm font-medium text-red-700 dark:text-red-400" role="alert">{error}</p>}
+        <button className={CLS_BOTON_SECUNDARIO} onClick={alCerrar}>Cancelar</button>
+        <button className={CLS_BOTON_PRIMARIO} onClick={guardar} disabled={guardando}>
+          {guardando ? 'Guardando…' : (original ? 'Guardar cambios' : 'Crear riesgo')}
+        </button>
+      </>}>
+      <div className="space-y-6">
+
+        <section className="space-y-3">
+          <TituloSeccion>Identificación</TituloSeccion>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div>
+              <label htmlFor="r-codigo" className={CLS_ETIQUETA}>Código</label>
+              <input id="r-codigo" className={CLS_INPUT + ' font-semibold uppercase'} value={b.codigo} onChange={pon('codigo')} />
+            </div>
+            <div>
+              <label htmlFor="r-proceso" className={CLS_ETIQUETA}>Proceso</label>
+              <select id="r-proceso" className={CLS_INPUT} value={b.proceso} onChange={pon('proceso')}>
+                {!b.proceso && <option value="">Selecciona…</option>}
+                {(ctx.entidad.procesos || []).map(p => <option key={p} value={p}>{p}</option>)}
+                {b.proceso && !(ctx.entidad.procesos || []).includes(b.proceso) && <option value={b.proceso}>{b.proceso}</option>}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="r-tipo" className={CLS_ETIQUETA}>Tipo de riesgo</label>
+              <select id="r-tipo" className={CLS_INPUT} value={b.tipo} onChange={cambiarTipo}>
+                {TIPOS_RIESGO.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+          </div>
+          {original && (
+            <div className="sm:w-1/3">
+              <label htmlFor="r-estado" className={CLS_ETIQUETA}>Estado</label>
+              <select id="r-estado" className={CLS_INPUT} value={b.estado} onChange={pon('estado')}>
+                {ESTADOS_RIESGO.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-3">
+          <TituloSeccion>Descripción</TituloSeccion>
+          <div>
+            <label htmlFor="r-nombre" className={CLS_ETIQUETA}>Riesgo (posible evento y su efecto)</label>
+            <textarea id="r-nombre" rows="2" className={CLS_INPUT} value={b.nombre} onChange={pon('nombre')}
+              placeholder="Ej.: Vencimiento de los términos legales para responder PQRSD" />
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label htmlFor="r-causas" className={CLS_ETIQUETA}>Causas (una por línea)</label>
+              <textarea id="r-causas" rows="3" className={CLS_INPUT} value={b.causas} onChange={pon('causas')} />
+            </div>
+            <div>
+              <label htmlFor="r-consec" className={CLS_ETIQUETA}>Consecuencias (una por línea)</label>
+              <textarea id="r-consec" rows="3" className={CLS_INPUT} value={b.consecuencias} onChange={pon('consecuencias')} />
+            </div>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <TituloSeccion>Análisis inherente</TituloSeccion>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr,1fr,auto]">
+            <div>
+              <label htmlFor="r-prob" className={CLS_ETIQUETA}>Probabilidad</label>
+              <select id="r-prob" className={CLS_INPUT} value={b.probabilidad} onChange={pon('probabilidad')}>
+                {NIVELES_PROBABILIDAD_DEFAULT.map(n => (
+                  <option key={n.nivel} value={n.nivel}>{n.nivel} · {n.etiqueta} ({n.pct}%) — {n.criterio}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="r-imp" className={CLS_ETIQUETA}>Impacto</label>
+              <select id="r-imp" className={CLS_INPUT} value={b.impacto} onChange={pon('impacto')}>
+                {NIVELES_IMPACTO_DEFAULT.map(n => (
+                  <option key={n.nivel} value={n.nivel} disabled={b.tipo === 'Corrupción' && n.nivel < 3}>
+                    {n.nivel} · {n.etiqueta} ({n.pct}%)
+                  </option>
+                ))}
+              </select>
+              {b.tipo === 'Corrupción' && (
+                <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-400">En riesgos de corrupción el impacto mínimo es Moderado (guía DAFP).</p>
+              )}
+            </div>
+            <div className="flex min-w-[130px] flex-col items-center justify-center gap-1 rounded-lg bg-slate-50 p-3 dark:bg-slate-800/60">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Zona inherente</span>
+              <ChipZona zona={calc.zonaInherente} grande />
+            </div>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <TituloSeccion>Controles existentes</TituloSeccion>
+            <button className={CLS_BOTON_SECUNDARIO} onClick={() => editarControl(null, null)}><IcoMas /> Agregar control</button>
+          </div>
+          {(b.controles || []).length === 0 ? (
+            <p className="rounded-lg border border-dashed border-slate-300 p-4 text-center text-sm text-slate-500 dark:border-slate-600 dark:text-slate-400">
+              Sin controles: el riesgo residual será igual al inherente.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {b.controles.map((c, idx) => (
+                <li key={idx} className="flex items-start gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                  <span className="mt-0.5 inline-flex h-7 w-12 shrink-0 items-center justify-center rounded bg-tinta-tenue text-xs font-bold text-tinta dark:bg-slate-700 dark:text-slate-200">
+                    {valoracionControl(c)}%
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium text-slate-700 dark:text-slate-200">{c.descripcion}</span>
+                    <span className="mt-0.5 block text-[11px] text-slate-500 dark:text-slate-400">
+                      {c.tipo} · {c.implementacion} · reduce {(TIPOS_CONTROL[c.tipo] || {}).afecta}
+                      {c.responsable ? ' · ' + c.responsable : ''}
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 gap-0.5">
+                    <button className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-tinta dark:hover:bg-slate-800"
+                      aria-label="Editar control" onClick={() => editarControl(c, idx)}><IcoLapiz /></button>
+                    <button className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-red-700 dark:hover:bg-slate-800"
+                      aria-label="Quitar control" onClick={() => quitarControl(idx)}><IcoBasura /></button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/60">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-[220px] flex-1 space-y-1 text-sm text-slate-700 dark:text-slate-200">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Cálculo del riesgo residual</p>
+              <p>Probabilidad: {pctCO(calc.pInh)} → <strong>{pctCO(calc.pPct)}</strong> · nivel {calc.pRes} ({NIVELES_PROBABILIDAD_DEFAULT[calc.pRes - 1].etiqueta})</p>
+              <p>Impacto: {pctCO(calc.iInh)} → <strong>{pctCO(calc.iPct)}</strong> · nivel {calc.iRes} ({NIVELES_IMPACTO_DEFAULT[calc.iRes - 1].etiqueta})</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {(b.controles || []).length} control(es) aplicados en cadena según la guía DAFP.
+              </p>
+              {calc.impactoAjustado && (
+                <p className="flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+                  <IcoAlerta className="h-3.5 w-3.5" /> Corrupción: el impacto residual no baja de Moderado.
+                </p>
+              )}
+            </div>
+            <div className="flex flex-col items-center gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Zona residual</span>
+              <ChipZona zona={calc.zonaResidual} grande />
+            </div>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <TituloSeccion>Tratamiento y plan de acción</TituloSeccion>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label htmlFor="r-trat" className={CLS_ETIQUETA}>Tratamiento</label>
+              <select id="r-trat" className={CLS_INPUT} value={b.tratamiento} onChange={pon('tratamiento')}>
+                {tratamientosPara(b.tipo).map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="r-resp" className={CLS_ETIQUETA}>Responsable del riesgo</label>
+              <input id="r-resp" className={CLS_INPUT} value={b.responsable} onChange={pon('responsable')} placeholder="Cargo o dependencia" />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {(b.plan || []).map((a, idx) => (
+              <div key={idx} className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+                <input aria-label="Descripción de la acción" placeholder="Acción del plan…"
+                  className={CLS_INPUT + ' min-w-[180px] flex-1'} value={a.descripcion}
+                  onChange={e => ponAccion(idx, 'descripcion', e.target.value)} />
+                <input aria-label="Responsable de la acción" placeholder="Responsable"
+                  className={CLS_INPUT + ' w-36'} value={a.responsable}
+                  onChange={e => ponAccion(idx, 'responsable', e.target.value)} />
+                <input aria-label="Fecha límite" type="date"
+                  className={CLS_INPUT + ' w-40 ' + (accionVencida(a) ? 'border-red-400 text-red-700 dark:text-red-400' : '')}
+                  value={a.fecha} onChange={e => ponAccion(idx, 'fecha', e.target.value)} />
+                <select aria-label="Estado de la acción" className={CLS_INPUT + ' w-32'} value={a.estado}
+                  onChange={e => ponAccion(idx, 'estado', e.target.value)}>
+                  {ESTADOS_ACCION.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <button className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-red-700 dark:hover:bg-slate-800"
+                  aria-label="Quitar acción" onClick={() => quitarAccion(idx)}><IcoBasura /></button>
+              </div>
+            ))}
+            <button className={CLS_BOTON_SECUNDARIO} onClick={agregarAccion}><IcoMas /> Agregar acción</button>
+          </div>
+        </section>
+      </div>
+    </Ventana>
+  );
+};
+
+/* --- Formulario del control (se apila sobre el formulario del riesgo) --- */
+const ModalControl = ({ props, alCerrar }) => {
+  const [c, setC] = useState(() => props.control ? clonar(props.control) : {
+    descripcion: '', tipo: 'Preventivo', implementacion: 'Manual',
+    responsable: '', documentacion: 'Documentado', frecuencia: 'Continua', evidencia: 'Con registro'
+  });
+  const [error, setError] = useState('');
+  const uid = useRef('ctl' + Math.random().toString(36).slice(2)).current;
+  const pon = (k, v) => setC(prev => ({ ...prev, [k]: v }));
+
+  const guardar = () => {
+    if (!String(c.descripcion || '').trim()) { setError('Describe el control.'); return; }
+    props.alGuardar({ ...c, descripcion: String(c.descripcion).trim() },
+      props.indice === undefined ? null : props.indice);
+    alCerrar();
+  };
+
+  const claseOpcion = (activa) => 'flex cursor-pointer items-start gap-2 rounded-lg border p-2.5 transition-colors ' +
+    (activa ? 'border-tinta bg-tinta-tenue dark:border-tinta-claro dark:bg-slate-800'
+            : 'border-slate-200 hover:border-slate-300 dark:border-slate-700');
+
+  return (
+    <Ventana titulo={props.control ? 'Editar control' : 'Agregar control'} ancho="max-w-xl" alCerrar={alCerrar}
+      subtitulo="Atributos de eficiencia según la guía DAFP"
+      pie={<>
+        {error && <p className="mr-auto self-center text-sm font-medium text-red-700 dark:text-red-400" role="alert">{error}</p>}
+        <button className={CLS_BOTON_SECUNDARIO} onClick={alCerrar}>Cancelar</button>
+        <button className={CLS_BOTON_PRIMARIO} onClick={guardar}>Guardar control</button>
+      </>}>
+      <div className="space-y-4">
+        <div>
+          <label htmlFor={uid + '-desc'} className={CLS_ETIQUETA}>Descripción del control</label>
+          <textarea id={uid + '-desc'} rows="2" className={CLS_INPUT} value={c.descripcion} autoFocus
+            onChange={e => pon('descripcion', e.target.value)}
+            placeholder="Ej.: Conciliaciones bancarias mensuales con acta firmada" />
+        </div>
+
+        <div>
+          <span className={CLS_ETIQUETA}>Tipo de control</span>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Tipo de control">
+            {Object.entries(TIPOS_CONTROL).map(([nombre, t]) => (
+              <label key={nombre} className={claseOpcion(c.tipo === nombre)}>
+                <input type="radio" name={uid + '-tipo'} className="mt-1" checked={c.tipo === nombre} onChange={() => pon('tipo', nombre)} />
+                <span>
+                  <span className="block text-sm font-semibold text-slate-700 dark:text-slate-200">{nombre} · {t.pct}%</span>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400">Reduce la {t.afecta === 'impacto' ? 'severidad del impacto' : 'probabilidad'}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <span className={CLS_ETIQUETA}>Implementación</span>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Implementación del control">
+            {Object.entries(IMPLEMENTACION_CONTROL).map(([nombre, pct]) => (
+              <label key={nombre} className={claseOpcion(c.implementacion === nombre)}>
+                <input type="radio" name={uid + '-impl'} className="mt-1" checked={c.implementacion === nombre} onChange={() => pon('implementacion', nombre)} />
+                <span>
+                  <span className="block text-sm font-semibold text-slate-700 dark:text-slate-200">{nombre} · {pct}%</span>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400">{nombre === 'Automático' ? 'Lo ejecuta un sistema' : 'Lo ejecuta una persona'}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label htmlFor={uid + '-resp'} className={CLS_ETIQUETA}>Responsable del control</label>
+          <input id={uid + '-resp'} className={CLS_INPUT} value={c.responsable} onChange={e => pon('responsable', e.target.value)} placeholder="Cargo o rol que lo ejecuta" />
+        </div>
+
+        <div>
+          <span className={CLS_ETIQUETA}>Atributos informativos (no puntúan)</span>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <select aria-label="Documentación" className={CLS_INPUT} value={c.documentacion} onChange={e => pon('documentacion', e.target.value)}>
+              {['Documentado', 'Sin documentar'].map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+            <select aria-label="Frecuencia" className={CLS_INPUT} value={c.frecuencia} onChange={e => pon('frecuencia', e.target.value)}>
+              {['Continua', 'Aleatoria'].map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+            <select aria-label="Evidencia" className={CLS_INPUT} value={c.evidencia} onChange={e => pon('evidencia', e.target.value)}>
+              {['Con registro', 'Sin registro'].map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+          Valoración del control: <strong>{valoracionControl(c)}%</strong> — reduce la {(TIPOS_CONTROL[c.tipo] || {}).afecta === 'impacto' ? 'severidad del impacto' : 'probabilidad'}.
+        </p>
+      </div>
+    </Ventana>
+  );
+};
+
+/* --- Detalle del riesgo (solo lectura) --- */
+const ModalVer = ({ props, alCerrar, ctx }) => {
+  const r = ctx.riesgosCalc.find(x => x.id === props.riesgoId);
+  const [historial, setHistorial] = useState(null);
+
+  const cargarHistorial = async (e) => {
+    if (!e.target.open || historial || !r) return;
+    try {
+      const todos = await DB.listarHistorial(ctx.entidad.id, 300);
+      setHistorial(todos.filter(h => h.riesgoCodigo === r.codigo).slice(0, 20));
+    } catch (err) { console.error(err); setHistorial([]); }
+  };
+
+  if (!r) {
+    return (
+      <Ventana titulo="Riesgo no disponible" ancho="max-w-md" alCerrar={alCerrar}
+        pie={<button className={CLS_BOTON_PRIMARIO} onClick={alCerrar}>Cerrar</button>}>
+        <p className="text-sm text-slate-600 dark:text-slate-300">El riesgo ya no existe o fue eliminado por otra persona.</p>
+      </Ventana>
+    );
+  }
+
+  const segs = [...(r.seguimientos || [])].sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+
+  return (
+    <Ventana titulo={r.codigo} subtitulo={r.proceso + ' · ' + ctx.entidad.nombre} ancho="max-w-3xl" alCerrar={alCerrar}
+      pie={<>
+        {ctx.puedeEditar && (
+          <button className={CLS_BOTON_SECUNDARIO} onClick={() => ctx.abrirModal({ tipo: 'riesgo', props: { riesgoId: r.id } })}>
+            <IcoLapiz /> Editar
+          </button>
+        )}
+        <button className={CLS_BOTON_PRIMARIO} onClick={alCerrar}>Cerrar</button>
+      </>}>
+      <div className="space-y-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <Etiqueta texto={r.tipo} /><Etiqueta texto={r.estado} />
+          {r.responsable && <span className="text-xs text-slate-500 dark:text-slate-400">Responsable: {r.responsable}</span>}
+        </div>
+
+        <p className="text-sm font-medium leading-relaxed text-slate-800 dark:text-slate-100">{r.nombre}</p>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {[['Causas', r.causas], ['Consecuencias', r.consecuencias]].map(([titulo, texto]) => (
+            <div key={titulo}>
+              <h4 className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{titulo}</h4>
+              {enLineas(texto).length ? (
+                <ul className="list-disc space-y-0.5 pl-4 text-sm text-slate-600 dark:text-slate-300">
+                  {enLineas(texto).map((l, i) => <li key={i}>{l}</li>)}
+                </ul>
+              ) : <p className="text-sm text-slate-400">Sin registrar.</p>}
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Riesgo inherente</p>
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <span className="text-xs text-slate-600 dark:text-slate-300">
+                P{r.probabilidad} · {NIVELES_PROBABILIDAD_DEFAULT[r.probabilidad - 1].etiqueta}<br />
+                I{r.impacto} · {NIVELES_IMPACTO_DEFAULT[r.impacto - 1].etiqueta}
+              </span>
+              <ChipZona zona={r.calc.zonaInherente} grande />
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Riesgo residual</p>
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <span className="text-xs text-slate-600 dark:text-slate-300">
+                P{r.calc.pRes} ({pctCO(r.calc.pPct)})<br />
+                I{r.calc.iRes} ({pctCO(r.calc.iPct)})
+              </span>
+              <ChipZona zona={r.calc.zonaResidual} grande />
+            </div>
+            {r.calc.impactoAjustado && (
+              <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-400">Impacto ajustado al mínimo de corrupción (Moderado).</p>
+            )}
+          </div>
+        </div>
+
+        <div>
+          <h4 className="mb-2 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            Controles ({(r.controles || []).length}) · Tratamiento: {r.tratamiento || '—'}
+          </h4>
+          {(r.controles || []).length ? (
+            <ul className="space-y-1.5">
+              {r.controles.map((c, i) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className="mt-0.5 inline-flex h-6 w-11 shrink-0 items-center justify-center rounded bg-tinta-tenue text-[11px] font-bold text-tinta dark:bg-slate-700 dark:text-slate-200">{valoracionControl(c)}%</span>
+                  <span className="text-slate-600 dark:text-slate-300">
+                    {c.descripcion}
+                    <span className="text-slate-400"> — {c.tipo}, {c.implementacion}{c.responsable ? ', ' + c.responsable : ''}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="text-sm text-slate-400">Sin controles registrados.</p>}
+        </div>
+
+        {(r.plan || []).length > 0 && (
+          <div>
+            <h4 className="mb-2 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Plan de acción</h4>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[520px] text-sm">
+                <thead className="text-left text-[11px] uppercase text-slate-400">
+                  <tr><th className="py-1 pr-3">Acción</th><th className="py-1 pr-3">Responsable</th><th className="py-1 pr-3">Fecha</th><th className="py-1">Estado</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {r.plan.map((a, i) => (
+                    <tr key={i}>
+                      <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-300">{a.descripcion}</td>
+                      <td className="py-1.5 pr-3 text-slate-500">{a.responsable || '—'}</td>
+                      <td className={'py-1.5 pr-3 whitespace-nowrap ' + (accionVencida(a) ? 'font-semibold text-red-700 dark:text-red-400' : 'text-slate-500')}>{formatearFecha(a.fecha)}</td>
+                      <td className="py-1.5">{accionVencida(a) ? <Etiqueta texto="Vencida" /> : <Etiqueta texto={a.estado} />}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        <div>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Seguimientos ({segs.length})</h4>
+            {ctx.puedeEditar && (
+              <button className={CLS_BOTON_SECUNDARIO} onClick={() => ctx.abrirModal({ tipo: 'seguimiento', props: { riesgoId: r.id } })}>
+                <IcoReloj /> Registrar seguimiento
+              </button>
+            )}
+          </div>
+          {segs.length ? (
+            <ol className="space-y-3 border-l-2 border-tinta-tenue pl-4 dark:border-slate-700">
+              {segs.map((s, i) => (
+                <li key={i} className="relative">
+                  <span className="absolute -left-[21px] top-1.5 h-2.5 w-2.5 rounded-full bg-tinta dark:bg-tinta-claro" aria-hidden="true"></span>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                    <strong className="text-slate-700 dark:text-slate-200">{formatearFecha(s.fecha)}</strong>
+                    <span>{s.periodo}</span>
+                    {s.eficacia && <Etiqueta texto={s.eficacia} />}
+                  </div>
+                  <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">{s.observacion}</p>
+                  {s.evidencia && (
+                    /^https?:\/\//i.test(s.evidencia)
+                      ? <a href={s.evidencia} target="_blank" rel="noopener noreferrer" className="break-all text-xs font-medium text-tinta underline dark:text-tinta-claro">{s.evidencia}</a>
+                      : <p className="text-xs text-slate-500 dark:text-slate-400">Evidencia: {s.evidencia}</p>
+                  )}
+                  <p className="mt-0.5 text-[11px] text-slate-400">Registró: {s.usuario || '—'}</p>
+                </li>
+              ))}
+            </ol>
+          ) : <p className="text-sm text-slate-400">Aún sin seguimientos.</p>}
+        </div>
+
+        <details className="rounded-lg border border-slate-200 p-3 dark:border-slate-700" onToggle={cargarHistorial}>
+          <summary className="cursor-pointer text-sm font-semibold text-tinta dark:text-slate-200">Historial de cambios del riesgo</summary>
+          {historial === null ? (
+            <p className="mt-2 text-sm text-slate-400">Cargando…</p>
+          ) : historial.length === 0 ? (
+            <p className="mt-2 text-sm text-slate-400">Sin registros para este riesgo.</p>
+          ) : (
+            <ul className="mt-2 space-y-1.5 text-xs text-slate-600 dark:text-slate-300">
+              {historial.map(h => (
+                <li key={h.id}>
+                  <strong>{formatearFechaHora(h.fecha)}</strong> · {h.usuario} · {h.accion}
+                  {h.detalle ? <span className="text-slate-400"> — {h.detalle}</span> : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </details>
+      </div>
+    </Ventana>
+  );
+};
+
+/* --- Registro de seguimiento periódico --- */
+const ModalSeguimiento = ({ props, alCerrar, ctx }) => {
+  const [riesgoId, setRiesgoId] = useState(props.riesgoId || '');
+  const [s, setS] = useState({ fecha: hoyISO(), periodo: periodoActual(), eficacia: 'Eficaz', observacion: '', evidencia: '' });
+  const [materializado, setMaterializado] = useState(false);
+  const [error, setError] = useState('');
+  const [guardando, setGuardando] = useState(false);
+  const pon = (k) => (e) => setS(prev => ({ ...prev, [k]: e.target.value }));
+  const riesgo = ctx.riesgosCalc.find(r => r.id === riesgoId);
+
+  const guardar = async () => {
+    if (!riesgo) { setError('Selecciona el riesgo.'); return; }
+    if (!String(s.observacion || '').trim()) { setError('Escribe la observación del seguimiento.'); return; }
+    setGuardando(true); setError('');
+    try {
+      await DB.agregarSeguimiento(riesgo.id, {
+        ...s, observacion: String(s.observacion).trim(),
+        usuario: ctx.usuario.usuario, registradoEn: new Date().toISOString()
+      });
+      if (materializado && riesgo.estado !== 'Materializado') {
+        await DB.actualizarRiesgo(riesgo.id, { estado: 'Materializado', actualizadoEn: new Date().toISOString() });
+        ctx.registrar('Marcó materialización', riesgo.codigo, s.periodo);
+      }
+      ctx.registrar('Registró seguimiento', riesgo.codigo, s.periodo + ' · ' + s.eficacia);
+      ctx.avisar('Seguimiento de ' + riesgo.codigo + ' registrado');
+      alCerrar();
+    } catch (e) {
+      console.error(e);
+      setError('No fue posible guardar el seguimiento.');
+      setGuardando(false);
+    }
+  };
+
+  return (
+    <Ventana titulo="Registrar seguimiento" ancho="max-w-lg" alCerrar={alCerrar}
+      subtitulo={riesgo ? riesgo.codigo + ' · ' + riesgo.nombre.slice(0, 70) : 'Seguimiento periódico del riesgo'}
+      pie={<>
+        {error && <p className="mr-auto self-center text-sm font-medium text-red-700 dark:text-red-400" role="alert">{error}</p>}
+        <button className={CLS_BOTON_SECUNDARIO} onClick={alCerrar}>Cancelar</button>
+        <button className={CLS_BOTON_PRIMARIO} onClick={guardar} disabled={guardando}>{guardando ? 'Guardando…' : 'Guardar seguimiento'}</button>
+      </>}>
+      <div className="space-y-4">
+        {!props.riesgoId && (
+          <div>
+            <label htmlFor="s-riesgo" className={CLS_ETIQUETA}>Riesgo</label>
+            <select id="s-riesgo" className={CLS_INPUT} value={riesgoId} onChange={e => setRiesgoId(e.target.value)}>
+              <option value="">Selecciona…</option>
+              {ordenarRiesgos(ctx.riesgosCalc.filter(r => r.estado !== 'Cerrado')).map(r => (
+                <option key={r.id} value={r.id}>{r.codigo} — {r.nombre.slice(0, 60)}</option>
+              ))}
+            </select>
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div>
+            <label htmlFor="s-fecha" className={CLS_ETIQUETA}>Fecha</label>
+            <input id="s-fecha" type="date" className={CLS_INPUT} value={s.fecha} onChange={pon('fecha')} />
+          </div>
+          <div>
+            <label htmlFor="s-periodo" className={CLS_ETIQUETA}>Periodo</label>
+            <input id="s-periodo" className={CLS_INPUT} value={s.periodo} onChange={pon('periodo')} placeholder="T3-2026" />
+          </div>
+          <div>
+            <label htmlFor="s-eficacia" className={CLS_ETIQUETA}>Eficacia del control</label>
+            <select id="s-eficacia" className={CLS_INPUT} value={s.eficacia} onChange={pon('eficacia')}>
+              {EFICACIAS.map(x => <option key={x} value={x}>{x}</option>)}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label htmlFor="s-obs" className={CLS_ETIQUETA}>Observación</label>
+          <textarea id="s-obs" rows="3" className={CLS_INPUT} value={s.observacion} autoFocus={!!props.riesgoId}
+            onChange={pon('observacion')} placeholder="Qué se revisó, resultado y compromisos…" />
+        </div>
+        <div>
+          <label htmlFor="s-evid" className={CLS_ETIQUETA}>Evidencia (enlace o referencia)</label>
+          <input id="s-evid" className={CLS_INPUT} value={s.evidencia} onChange={pon('evidencia')}
+            placeholder="https://… o número de acta / memorando" />
+        </div>
+        <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
+          <input type="checkbox" className="mt-0.5" checked={materializado} onChange={e => setMaterializado(e.target.checked)} />
+          <span className="text-slate-600 dark:text-slate-300">
+            El riesgo <strong>se materializó</strong> en este periodo (el estado del riesgo pasará a Materializado).
+          </span>
+        </label>
+      </div>
+    </Ventana>
+  );
+};
+
+/* ===== 3.10 Pestaña Seguimiento ===== */
+
+const SeguimientoTab = ({ riesgosCalc, ctx }) => {
+  const [filtroAccion, setFiltroAccion] = useState('todas');
+  const [filtroPeriodo, setFiltroPeriodo] = useState('');
+
+  const acciones = [];
+  riesgosCalc.filter(r => r.estado !== 'Cerrado').forEach(r =>
+    (r.plan || []).forEach((a, idx) => acciones.push({ r, a, idx })));
+
+  const conteos = {
+    todas: acciones.length,
+    vencidas: acciones.filter(x => accionVencida(x.a)).length,
+    abiertas: acciones.filter(x => x.a.estado !== 'Cumplida' && !accionVencida(x.a)).length,
+    cumplidas: acciones.filter(x => x.a.estado === 'Cumplida').length
+  };
+  const accionesVisibles = acciones.filter(x =>
+    filtroAccion === 'todas' ? true :
+    filtroAccion === 'vencidas' ? accionVencida(x.a) :
+    filtroAccion === 'abiertas' ? (x.a.estado !== 'Cumplida' && !accionVencida(x.a)) :
+    x.a.estado === 'Cumplida'
+  ).sort((x, y) => String(x.a.fecha || '9999').localeCompare(String(y.a.fecha || '9999')));
+
+  const cambiarEstadoAccion = async (x, nuevo) => {
+    try {
+      const plan = clonar(x.r.plan || []);
+      plan[x.idx] = { ...plan[x.idx], estado: nuevo };
+      await DB.actualizarRiesgo(x.r.id, { plan, actualizadoEn: new Date().toISOString() });
+      ctx.registrar('Cambió estado de acción', x.r.codigo, '"' + String(x.a.descripcion).slice(0, 60) + '" → ' + nuevo);
+    } catch (e) { console.error(e); ctx.avisar('No fue posible actualizar la acción', 'error'); }
+  };
+
+  const segs = [];
+  riesgosCalc.forEach(r => (r.seguimientos || []).forEach(s => segs.push({ r, s })));
+  segs.sort((a, b) => String(b.s.fecha).localeCompare(String(a.s.fecha)));
+  const periodos = [...new Set(segs.map(x => x.s.periodo).filter(Boolean))].sort().reverse();
+  const segsVisibles = segs.filter(x => !filtroPeriodo || x.s.periodo === filtroPeriodo);
+
+  return (
+    <div className="animar-subir space-y-5">
+      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <TituloSeccion>Acciones del plan</TituloSeccion>
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filtrar acciones">
+            {[['todas', 'Todas'], ['vencidas', 'Vencidas'], ['abiertas', 'En curso'], ['cumplidas', 'Cumplidas']].map(([v, nombre]) => (
+              <button key={v} onClick={() => setFiltroAccion(v)}
+                className={'rounded-full px-3 py-1 text-xs font-semibold transition-colors ' +
+                  (filtroAccion === v ? 'bg-tinta text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300')}>
+                {nombre} · {conteos[v]}
+              </button>
+            ))}
+          </div>
+        </div>
+        {accionesVisibles.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-sm">
+              <thead className="text-left text-[11px] uppercase tracking-wide text-slate-400">
+                <tr>
+                  <th className="py-2 pr-3">Riesgo</th><th className="py-2 pr-3">Acción</th>
+                  <th className="py-2 pr-3">Responsable</th><th className="py-2 pr-3">Fecha límite</th><th className="py-2">Estado</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {accionesVisibles.map((x, i) => (
+                  <tr key={x.r.id + '-' + x.idx + '-' + i} className="align-top">
+                    <td className="whitespace-nowrap py-2 pr-3 text-xs font-bold text-slate-600 dark:text-slate-300">{x.r.codigo}</td>
+                    <td className="py-2 pr-3 text-slate-600 dark:text-slate-300">{x.a.descripcion}</td>
+                    <td className="py-2 pr-3 text-slate-500">{x.a.responsable || '—'}</td>
+                    <td className={'whitespace-nowrap py-2 pr-3 ' + (accionVencida(x.a) ? 'font-semibold text-red-700 dark:text-red-400' : 'text-slate-500')}>
+                      {formatearFecha(x.a.fecha)}{accionVencida(x.a) && <span className="ml-1.5 align-middle"><Etiqueta texto="Vencida" /></span>}
+                    </td>
+                    <td className="py-2">
+                      {ctx.puedeEditar ? (
+                        <select aria-label={'Estado de la acción de ' + x.r.codigo}
+                          className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-800"
+                          value={x.a.estado} onChange={e => cambiarEstadoAccion(x, e.target.value)}>
+                          {ESTADOS_ACCION.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      ) : <Etiqueta texto={x.a.estado} />}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <p className="text-sm text-slate-500 dark:text-slate-400">No hay acciones en este filtro.</p>}
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <TituloSeccion>Bitácora de seguimientos</TituloSeccion>
+          <div className="flex flex-wrap items-center gap-2">
+            <select aria-label="Filtrar por periodo" className={CLS_INPUT + ' w-auto'} value={filtroPeriodo} onChange={e => setFiltroPeriodo(e.target.value)}>
+              <option value="">Todos los periodos</option>
+              {periodos.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+            {ctx.puedeEditar && (
+              <button className={CLS_BOTON_PRIMARIO} onClick={() => ctx.abrirModal({ tipo: 'seguimiento', props: {} })}>
+                <IcoReloj /> Registrar seguimiento
+              </button>
+            )}
+          </div>
+        </div>
+        {segsVisibles.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[820px] text-sm">
+              <thead className="text-left text-[11px] uppercase tracking-wide text-slate-400">
+                <tr>
+                  <th className="py-2 pr-3">Fecha</th><th className="py-2 pr-3">Periodo</th><th className="py-2 pr-3">Riesgo</th>
+                  <th className="py-2 pr-3">Eficacia</th><th className="py-2 pr-3">Observación</th><th className="py-2 pr-3">Evidencia</th><th className="py-2">Registró</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {segsVisibles.map((x, i) => (
+                  <tr key={i} className="align-top">
+                    <td className="whitespace-nowrap py-2 pr-3 text-slate-600 dark:text-slate-300">{formatearFecha(x.s.fecha)}</td>
+                    <td className="whitespace-nowrap py-2 pr-3 text-slate-500">{x.s.periodo}</td>
+                    <td className="py-2 pr-3">
+                      <button className="text-xs font-bold text-tinta underline-offset-2 hover:underline dark:text-tinta-claro"
+                        onClick={() => ctx.abrirModal({ tipo: 'ver', props: { riesgoId: x.r.id } })}>{x.r.codigo}</button>
+                    </td>
+                    <td className="py-2 pr-3">{x.s.eficacia ? <Etiqueta texto={x.s.eficacia} /> : '—'}</td>
+                    <td className="max-w-[340px] py-2 pr-3 text-slate-600 dark:text-slate-300">
+                      <span className="linea-2" title={x.s.observacion}>{x.s.observacion}</span>
+                    </td>
+                    <td className="max-w-[180px] py-2 pr-3 text-xs">
+                      {x.s.evidencia
+                        ? (/^https?:\/\//i.test(x.s.evidencia)
+                          ? <a href={x.s.evidencia} target="_blank" rel="noopener noreferrer" className="break-all font-medium text-tinta underline dark:text-tinta-claro">Enlace</a>
+                          : <span className="text-slate-500">{x.s.evidencia}</span>)
+                        : '—'}
+                    </td>
+                    <td className="whitespace-nowrap py-2 text-xs text-slate-500">{x.s.usuario || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <p className="text-sm text-slate-500 dark:text-slate-400">Sin seguimientos registrados{filtroPeriodo ? ' en ' + filtroPeriodo : ''}.</p>}
+      </section>
+    </div>
+  );
+};
+
+/* ===== 3.11 Pestaña Administración ===== */
+
+const AdminTab = ({ ctx }) => {
+  const [usuarios, setUsuarios] = useState(null);
+  const [historial, setHistorial] = useState(null);
+
+  const cargarUsuarios = useCallback(async () => {
+    try { setUsuarios(await DB.listarUsuarios()); }
+    catch (e) { console.error(e); setUsuarios([]); ctx.avisar('No fue posible cargar los usuarios', 'error'); }
+  }, []);
+  const cargarHistorial = useCallback(async () => {
+    try { setHistorial(await DB.listarHistorial(ctx.entidad.id, 300)); }
+    catch (e) { console.error(e); setHistorial([]); }
+  }, [ctx.entidad.id]);
+
+  useEffect(() => { cargarUsuarios(); }, [cargarUsuarios]);
+  useEffect(() => { setHistorial(null); cargarHistorial(); }, [cargarHistorial]);
+
+  const nombreEntidad = (id) => {
+    const e = (ctx.catalogoEntidades || []).find(x => x.id === id);
+    return e ? (e.sigla || e.nombre) : id;
+  };
+
+  return (
+    <div className="animar-subir space-y-5">
+      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <TituloSeccion>Entidades</TituloSeccion>
+          <button className={CLS_BOTON_PRIMARIO} onClick={() => ctx.abrirModal({ tipo: 'entidad', props: {} })}>
+            <IcoMas /> Nueva entidad
+          </button>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {(ctx.catalogoEntidades || []).map(e => (
+            <div key={e.id} className={'flex items-start gap-3 rounded-lg border p-3 dark:border-slate-700 ' + (e.activo === false ? 'border-slate-200 opacity-60' : 'border-slate-200')}>
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-tinta font-display text-xs font-bold text-white">
+                {(e.sigla || 'E').slice(0, 4)}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{e.nombre}</p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {e.nit ? 'NIT ' + e.nit + ' · ' : ''}{(e.procesos || []).length} procesos{e.activo === false ? ' · inactiva' : ''}
+                </p>
+              </div>
+              <button className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-tinta dark:hover:bg-slate-800"
+                aria-label={'Editar la entidad ' + e.nombre}
+                onClick={() => ctx.abrirModal({ tipo: 'entidad', props: { entidadId: e.id } })}><IcoLapiz /></button>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <TituloSeccion>Usuarios</TituloSeccion>
+          <button className={CLS_BOTON_PRIMARIO}
+            onClick={() => ctx.abrirModal({ tipo: 'usuario', props: { usuarios: usuarios || [], alGuardado: cargarUsuarios } })}>
+            <IcoMas /> Nuevo usuario
+          </button>
+        </div>
+        {usuarios === null ? <p className="text-sm text-slate-400">Cargando…</p> : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[680px] text-sm">
+              <thead className="text-left text-[11px] uppercase tracking-wide text-slate-400">
+                <tr><th className="py-2 pr-3">Usuario</th><th className="py-2 pr-3">Nombre</th><th className="py-2 pr-3">Rol</th>
+                  <th className="py-2 pr-3">Entidades</th><th className="py-2 pr-3">Estado</th><th className="py-2 text-right">Editar</th></tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {usuarios.map(u => (
+                  <tr key={u.id}>
+                    <td className="py-2 pr-3 font-semibold text-slate-700 dark:text-slate-200">{u.usuario}</td>
+                    <td className="py-2 pr-3 text-slate-600 dark:text-slate-300">{u.nombre}</td>
+                    <td className="py-2 pr-3">{(ROLES.find(r => r.valor === u.rol) || {}).etiqueta || u.rol}</td>
+                    <td className="py-2 pr-3 text-xs text-slate-500">
+                      {u.entidades === 'todas' ? 'Todas' : (u.entidades || []).map(nombreEntidad).join(', ') || '—'}
+                    </td>
+                    <td className="py-2 pr-3">{u.activo === false ? <Etiqueta texto="Inactivo" /> : <Etiqueta texto="Activo" />}</td>
+                    <td className="py-2 text-right">
+                      <button className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-tinta dark:hover:bg-slate-800"
+                        aria-label={'Editar el usuario ' + u.usuario}
+                        onClick={() => ctx.abrirModal({ tipo: 'usuario', props: { usuarioEditar: u, usuarios, alGuardado: cargarUsuarios } })}>
+                        <IcoLapiz />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <TituloSeccion>Historial de {ctx.entidad.sigla || ctx.entidad.nombre} (últimos 300)</TituloSeccion>
+          <button className={CLS_BOTON_SECUNDARIO} onClick={cargarHistorial}>Actualizar</button>
+        </div>
+        {historial === null ? <p className="text-sm text-slate-400">Cargando…</p> :
+          historial.length === 0 ? <p className="text-sm text-slate-400">Sin movimientos registrados.</p> : (
+          <div className="max-h-96 overflow-auto">
+            <table className="w-full min-w-[680px] text-xs">
+              <thead className="sticky top-0 bg-white text-left uppercase tracking-wide text-slate-400 dark:bg-slate-900">
+                <tr><th className="py-2 pr-3">Fecha</th><th className="py-2 pr-3">Usuario</th><th className="py-2 pr-3">Riesgo</th>
+                  <th className="py-2 pr-3">Acción</th><th className="py-2">Detalle</th></tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {historial.map(h => (
+                  <tr key={h.id} className="align-top">
+                    <td className="whitespace-nowrap py-1.5 pr-3 text-slate-500">{formatearFechaHora(h.fecha)}</td>
+                    <td className="whitespace-nowrap py-1.5 pr-3 font-semibold text-slate-600 dark:text-slate-300">{h.usuario}</td>
+                    <td className="whitespace-nowrap py-1.5 pr-3 text-slate-500">{h.riesgoCodigo || '—'}</td>
+                    <td className="whitespace-nowrap py-1.5 pr-3 text-slate-600 dark:text-slate-300">{h.accion}</td>
+                    <td className="py-1.5 text-slate-500">{h.detalle}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+};
+
+/* --- Crear / editar entidad (nombre, sigla y sus procesos) --- */
+const ModalEntidad = ({ props, alCerrar, ctx }) => {
+  const original = props.entidadId ? (ctx.catalogoEntidades || []).find(e => e.id === props.entidadId) : null;
+  const [e, setE] = useState(() => original ? clonar(original) : { nombre: '', sigla: '', nit: '', activo: true, procesos: [] });
+  const [nuevoProceso, setNuevoProceso] = useState('');
+  const [error, setError] = useState('');
+  const [guardando, setGuardando] = useState(false);
+  const pon = (k) => (ev) => setE(prev => ({ ...prev, [k]: ev.target.value }));
+
+  const agregarProceso = () => {
+    const p = nuevoProceso.trim();
+    if (!p) return;
+    if ((e.procesos || []).some(x => x.toLowerCase() === p.toLowerCase())) { setNuevoProceso(''); return; }
+    setE(prev => ({ ...prev, procesos: [...(prev.procesos || []), p] }));
+    setNuevoProceso('');
+  };
+  const quitarProceso = (p) => setE(prev => ({ ...prev, procesos: prev.procesos.filter(x => x !== p) }));
+
+  const guardar = async () => {
+    if (!e.nombre.trim()) { setError('Escribe el nombre de la entidad.'); return; }
+    if (!String(e.sigla || '').trim()) { setError('Escribe la sigla (se usa en los códigos de riesgo).'); return; }
+    setGuardando(true); setError('');
+    const datos = {
+      nombre: e.nombre.trim(), sigla: String(e.sigla).trim().toUpperCase(),
+      nit: (e.nit || '').trim(), activo: e.activo !== false, procesos: e.procesos || []
+    };
+    try {
+      let id = props.entidadId;
+      if (id) {
+        await DB.actualizarEntidad(id, datos);
+      } else {
+        id = await DB.crearEntidad({ ...datos, creadoEn: new Date().toISOString() });
+      }
+      DB.registrarHistorial(id, {
+        fecha: new Date().toISOString(), usuario: ctx.usuario.usuario, riesgoCodigo: '',
+        accion: props.entidadId ? 'Actualizó la entidad' : 'Creó la entidad', detalle: datos.nombre
+      }).catch(() => {});
+      await ctx.refrescarEntidades();
+      ctx.avisar('Entidad ' + datos.sigla + ' guardada');
+      alCerrar();
+    } catch (err) {
+      console.error(err);
+      setError('No fue posible guardar la entidad.');
+      setGuardando(false);
+    }
+  };
+
+  return (
+    <Ventana titulo={original ? 'Editar entidad' : 'Nueva entidad'} ancho="max-w-lg" alCerrar={alCerrar}
+      pie={<>
+        {error && <p className="mr-auto self-center text-sm font-medium text-red-700 dark:text-red-400" role="alert">{error}</p>}
+        <button className={CLS_BOTON_SECUNDARIO} onClick={alCerrar}>Cancelar</button>
+        <button className={CLS_BOTON_PRIMARIO} onClick={guardar} disabled={guardando}>{guardando ? 'Guardando…' : 'Guardar entidad'}</button>
+      </>}>
+      <div className="space-y-4">
+        <div>
+          <label htmlFor="e-nombre" className={CLS_ETIQUETA}>Nombre de la entidad</label>
+          <input id="e-nombre" className={CLS_INPUT} value={e.nombre} autoFocus onChange={pon('nombre')}
+            placeholder="Ej.: Empresa de Parques y Eventos de Antioquia" />
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label htmlFor="e-sigla" className={CLS_ETIQUETA}>Sigla (para los códigos)</label>
+            <input id="e-sigla" className={CLS_INPUT + ' uppercase'} value={e.sigla} onChange={pon('sigla')} placeholder="ACTIVA" />
+          </div>
+          <div>
+            <label htmlFor="e-nit" className={CLS_ETIQUETA}>NIT (opcional)</label>
+            <input id="e-nit" className={CLS_INPUT} value={e.nit} onChange={pon('nit')} placeholder="900.000.000-1" />
+          </div>
+        </div>
+        <div>
+          <span className={CLS_ETIQUETA}>Procesos de la entidad</span>
+          <div className="flex flex-wrap gap-1.5">
+            {(e.procesos || []).map(p => (
+              <span key={p} className="inline-flex items-center gap-1 rounded-full bg-tinta-tenue px-2.5 py-1 text-xs font-medium text-tinta dark:bg-slate-700 dark:text-slate-200">
+                {p}
+                <button aria-label={'Quitar el proceso ' + p} className="rounded-full p-0.5 hover:bg-white/60 dark:hover:bg-slate-600"
+                  onClick={() => quitarProceso(p)}><IcoCerrar className="h-3 w-3" /></button>
+              </span>
+            ))}
+            {(e.procesos || []).length === 0 && <span className="text-xs text-slate-400">Aún sin procesos.</span>}
+          </div>
+          <div className="mt-2 flex gap-2">
+            <input aria-label="Nuevo proceso" className={CLS_INPUT + ' flex-1'} value={nuevoProceso}
+              placeholder="Ej.: Gestión Contractual" onChange={ev => setNuevoProceso(ev.target.value)}
+              onKeyDown={ev => { if (ev.key === 'Enter') agregarProceso(); }} />
+            <button className={CLS_BOTON_SECUNDARIO} onClick={agregarProceso}><IcoMas /> Agregar</button>
+          </div>
+        </div>
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+          <input type="checkbox" checked={e.activo !== false} onChange={ev => setE(prev => ({ ...prev, activo: ev.target.checked }))} />
+          Entidad activa (aparece en el selector)
+        </label>
+      </div>
+    </Ventana>
+  );
+};
+
+/* --- Crear / editar usuario (rol, entidades asignadas y clave) --- */
+const ModalUsuario = ({ props, alCerrar, ctx }) => {
+  const original = props.usuarioEditar || null;
+  const esYo = original && ctx.usuario && original.id === ctx.usuario.id;
+  const [u, setU] = useState(() => original
+    ? { usuario: original.usuario, nombre: original.nombre, rol: original.rol, activo: original.activo !== false, entidades: original.entidades === 'todas' ? 'todas' : [...(original.entidades || [])] }
+    : { usuario: '', nombre: '', rol: 'gestor', activo: true, entidades: [] });
+  const [clave, setClave] = useState('');
+  const [clave2, setClave2] = useState('');
+  const [error, setError] = useState('');
+  const [guardando, setGuardando] = useState(false);
+
+  const alternarEntidad = (id) => setU(prev => {
+    const lista = prev.entidades === 'todas' ? [] : [...prev.entidades];
+    return { ...prev, entidades: lista.includes(id) ? lista.filter(x => x !== id) : [...lista, id] };
+  });
+
+  const guardar = async () => {
+    const login = String(u.usuario || '').trim().toLowerCase();
+    if (!login || !u.nombre.trim()) { setError('Completa el usuario y el nombre.'); return; }
+    if (!/^[a-z0-9._-]{3,}$/.test(login)) { setError('Usuario inválido: mínimo 3 caracteres, sin espacios.'); return; }
+    if (!original && (props.usuarios || []).some(x => x.usuario === login)) { setError('Ya existe el usuario ' + login + '.'); return; }
+    if (!original && clave.length < 4) { setError('La clave debe tener al menos 4 caracteres.'); return; }
+    if ((clave || clave2) && clave !== clave2) { setError('Las claves no coinciden.'); return; }
+
+    /* No dejar el sistema sin administración activa */
+    const adminsActivos = (props.usuarios || []).filter(x => x.rol === 'admin' && x.activo !== false);
+    if (original && original.rol === 'admin' && (u.rol !== 'admin' || !u.activo) &&
+        adminsActivos.length <= 1 && adminsActivos.some(x => x.id === original.id)) {
+      setError('No puedes dejar el sistema sin una cuenta de administración activa.'); return;
+    }
+
+    setGuardando(true); setError('');
+    try {
+      const datos = {
+        usuario: login, nombre: u.nombre.trim(), rol: u.rol, activo: !!u.activo,
+        entidades: u.entidades === 'todas' ? 'todas' : u.entidades
+      };
+      if (clave) datos.claveHash = await window.calcularHashClave(login, clave);
+      if (original) {
+        await DB.actualizarUsuario(original.id, datos);
+        ctx.avisar('Usuario ' + login + ' actualizado' + (clave ? ' (clave restablecida)' : ''));
+      } else {
+        await DB.crearUsuario({ ...datos, creadoEn: new Date().toISOString() });
+        ctx.avisar('Usuario ' + login + ' creado');
+      }
+      if (props.alGuardado) props.alGuardado();
+      alCerrar();
+    } catch (e) {
+      console.error(e);
+      setError('No fue posible guardar el usuario.');
+      setGuardando(false);
+    }
+  };
+
+  return (
+    <Ventana titulo={original ? 'Editar usuario' : 'Nuevo usuario'} ancho="max-w-lg" alCerrar={alCerrar}
+      pie={<>
+        {error && <p className="mr-auto self-center text-sm font-medium text-red-700 dark:text-red-400" role="alert">{error}</p>}
+        <button className={CLS_BOTON_SECUNDARIO} onClick={alCerrar}>Cancelar</button>
+        <button className={CLS_BOTON_PRIMARIO} onClick={guardar} disabled={guardando}>{guardando ? 'Guardando…' : 'Guardar usuario'}</button>
+      </>}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label htmlFor="u-login" className={CLS_ETIQUETA}>Usuario de ingreso</label>
+            <input id="u-login" className={CLS_INPUT} value={u.usuario} disabled={!!original}
+              onChange={ev => setU(prev => ({ ...prev, usuario: ev.target.value }))} />
+          </div>
+          <div>
+            <label htmlFor="u-nombre" className={CLS_ETIQUETA}>Nombre completo</label>
+            <input id="u-nombre" className={CLS_INPUT} value={u.nombre}
+              onChange={ev => setU(prev => ({ ...prev, nombre: ev.target.value }))} />
+          </div>
+        </div>
+
+        <div>
+          <label htmlFor="u-rol" className={CLS_ETIQUETA}>Rol</label>
+          <select id="u-rol" className={CLS_INPUT} value={u.rol} disabled={esYo}
+            onChange={ev => setU(prev => ({ ...prev, rol: ev.target.value }))}>
+            {ROLES.map(r => <option key={r.valor} value={r.valor}>{r.etiqueta} — {r.ayuda}</option>)}
+          </select>
+          {esYo && <p className="mt-1 text-[11px] text-slate-400">No puedes cambiar tu propio rol ni desactivarte.</p>}
+        </div>
+
+        <div>
+          <span className={CLS_ETIQUETA}>Entidades asignadas</span>
+          <label className="mb-1.5 flex cursor-pointer items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+            <input type="checkbox" checked={u.entidades === 'todas'}
+              onChange={ev => setU(prev => ({ ...prev, entidades: ev.target.checked ? 'todas' : [] }))} />
+            Todas las entidades
+          </label>
+          {u.entidades !== 'todas' && (
+            <div className="grid max-h-40 grid-cols-1 gap-1 overflow-y-auto rounded-lg border border-slate-200 p-2 sm:grid-cols-2 dark:border-slate-700">
+              {(ctx.catalogoEntidades || []).map(e => (
+                <label key={e.id} className="flex cursor-pointer items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                  <input type="checkbox" checked={u.entidades.includes(e.id)} onChange={() => alternarEntidad(e.id)} />
+                  <span className="truncate">{e.sigla || e.nombre}</span>
+                </label>
+              ))}
+              {(ctx.catalogoEntidades || []).length === 0 && <span className="text-xs text-slate-400">No hay entidades creadas.</span>}
+            </div>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label htmlFor="u-clave" className={CLS_ETIQUETA}>{original ? 'Nueva clave (opcional)' : 'Clave'}</label>
+            <input id="u-clave" type="password" className={CLS_INPUT} value={clave} onChange={ev => setClave(ev.target.value)}
+              placeholder={original ? 'Vacía = no cambia' : ''} autoComplete="new-password" />
+          </div>
+          <div>
+            <label htmlFor="u-clave2" className={CLS_ETIQUETA}>Repetir clave</label>
+            <input id="u-clave2" type="password" className={CLS_INPUT} value={clave2} onChange={ev => setClave2(ev.target.value)} autoComplete="new-password" />
+          </div>
+        </div>
+
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+          <input type="checkbox" checked={u.activo} disabled={esYo}
+            onChange={ev => setU(prev => ({ ...prev, activo: ev.target.checked }))} />
+          Usuario activo (puede ingresar)
+        </label>
+      </div>
+    </Ventana>
+  );
+};
+
+/* ===== 3.12 Componente raíz y montaje ===== */
+
+const PilaModales = ({ modales, cerrarModal, ctx }) => (
+  <>
+    {modales.map(m => {
+      const comunes = { props: m.props || {}, alCerrar: () => cerrarModal(m.id), ctx };
+      switch (m.tipo) {
+        case 'riesgo': return <ModalRiesgo key={m.id} {...comunes} />;
+        case 'ver': return <ModalVer key={m.id} {...comunes} />;
+        case 'control': return <ModalControl key={m.id} {...comunes} />;
+        case 'seguimiento': return <ModalSeguimiento key={m.id} {...comunes} />;
+        case 'celda': return <ModalCelda key={m.id} {...comunes} />;
+        case 'confirmar': return <ModalConfirmar key={m.id} {...comunes} />;
+        case 'importar-resumen': return <ModalImportarResumen key={m.id} {...comunes} />;
+        case 'entidad': return <ModalEntidad key={m.id} {...comunes} />;
+        case 'usuario': return <ModalUsuario key={m.id} {...comunes} />;
+        default: return null;
+      }
+    })}
+  </>
+);
+
+const BotonSubir = () => {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const f = () => setVisible(window.scrollY > 400);
+    window.addEventListener('scroll', f, { passive: true });
+    return () => window.removeEventListener('scroll', f);
+  }, []);
+  if (!visible) return null;
+  return (
+    <button aria-label="Volver arriba"
+      onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+      className="animar-aparecer fixed bottom-5 left-5 z-40 rounded-full bg-tinta p-3 text-white shadow-lg hover:bg-tinta-claro">
+      <IcoFlechaArriba className="h-5 w-5" />
+    </button>
+  );
+};
+
+const PESTANIAS = [
+  ['panel', 'Panel'], ['riesgos', 'Riesgos'], ['mapa', 'Mapa de calor'], ['seguimiento', 'Seguimiento']
+];
+
+const App = () => {
+  const [fase, setFase] = useState('cargando');
+  const [errorInicio, setErrorInicio] = useState('');
+  const [usuario, setUsuario] = useState(null);
+  const [catalogoEntidades, setCatalogoEntidades] = useState([]);
+  const [entidades, setEntidades] = useState([]);
+  const [entidad, setEntidad] = useState(null);
+  const [riesgos, setRiesgos] = useState([]);
+  const [pestania, setPestania] = useState('panel');
+  const [modales, setModales] = useState([]);
+  const [avisos, setAvisos] = useState([]);
+  const [oscuro, setOscuro] = useState(() => localStorage.getItem('mr_tema') === 'oscuro');
+
+  /* Tema claro / oscuro persistente */
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', oscuro);
+    try { localStorage.setItem('mr_tema', oscuro ? 'oscuro' : 'claro'); } catch (e) {}
+  }, [oscuro]);
+
+  /* ESC cierra el modal superior de la pila */
+  useEffect(() => {
+    const f = (e) => { if (e.key === 'Escape') setModales(ms => ms.slice(0, -1)); };
+    window.addEventListener('keydown', f);
+    return () => window.removeEventListener('keydown', f);
+  }, []);
+
+  /* Arranque: decide entre configurar, primer uso o acceso */
+  useEffect(() => {
+    (async () => {
+      if (!window.FIREBASE_CONFIGURADO) { setFase('configurar'); return; }
+      try {
+        await DB.iniciar('firestore');
+        const hay = await DB.hayUsuarios();
+        setFase(hay ? 'acceso' : 'bootstrap');
+      } catch (e) {
+        console.error(e);
+        setErrorInicio(e && e.code ? e.code : 'error de conexión');
+        setFase('configurar');
+      }
+    })();
+  }, []);
+
+  const avisar = useCallback((texto, tipo) => {
+    const id = Date.now() + Math.random();
+    setAvisos(a => [...a, { id, texto, tipo: tipo || 'ok' }]);
+    setTimeout(() => setAvisos(a => a.filter(x => x.id !== id)), 4200);
+  }, []);
+  const abrirModal = useCallback((m) => setModales(ms => [...ms, { ...m, id: Date.now() + Math.random() }]), []);
+  const cerrarModal = useCallback((id) => setModales(ms => id ? ms.filter(m => m.id !== id) : ms.slice(0, -1)), []);
+
+  /* Suscripción viva a los riesgos de la entidad elegida */
+  useEffect(() => {
+    if (fase !== 'listo' || !entidad) return;
+    const des = DB.suscribirRiesgos(entidad.id, rs => setRiesgos(rs),
+      () => avisar('Se perdió la conexión con los riesgos', 'error'));
+    return des;
+  }, [fase, entidad ? entidad.id : null]);
+
+  const riesgosCalc = useMemo(() => riesgos.map(r => ({ ...r, calc: calcularResidual(r) })), [riesgos]);
+
+  const registrar = useCallback((accion, riesgoCodigo, detalle) => {
+    if (!entidad || !usuario) return;
+    DB.registrarHistorial(entidad.id, {
+      accion, riesgoCodigo: riesgoCodigo || '', detalle: detalle || '',
+      usuario: usuario.usuario, fecha: new Date().toISOString()
+    }).catch(e => console.warn('Historial:', e));
+  }, [entidad, usuario]);
+
+  const visiblesPara = (todas, u) => todas.filter(e => e.activo !== false &&
+    (u.entidades === 'todas' || (Array.isArray(u.entidades) && u.entidades.includes(e.id))));
+
+  const refrescarEntidades = useCallback(async () => {
+    const todas = await DB.listarEntidades();
+    setCatalogoEntidades(todas);
+    if (usuario) setEntidades(visiblesPara(todas, usuario));
+    if (entidad) {
+      const actual = todas.find(x => x.id === entidad.id);
+      if (actual) setEntidad(actual);
+    }
+  }, [usuario, entidad]);
+
+  const elegirEntidad = (e) => { setRiesgos([]); setEntidad(e); setPestania('panel'); setFase('listo'); };
+
+  const alIngresar = async (u) => {
+    setUsuario(u);
+    const todas = await DB.listarEntidades();
+    setCatalogoEntidades(todas);
+    const visibles = visiblesPara(todas, u);
+    setEntidades(visibles);
+    if (visibles.length === 1 && u.rol !== 'admin') elegirEntidad(visibles[0]);
+    else setFase('seleccion');
+  };
+
+  const entrarDemo = async () => {
+    await DB.iniciar('memoria');
+    setFase('acceso');
+    avisar('Modo demostración: los cambios no se guardan', 'info');
+  };
+
+  const salir = () => {
+    setUsuario(null); setEntidad(null); setEntidades([]); setCatalogoEntidades([]);
+    setRiesgos([]); setModales([]); setPestania('panel');
+    setFase('acceso');
+  };
+
+  const puedeEditar = !!usuario && usuario.rol !== 'consulta';
+  const esAdmin = !!usuario && usuario.rol === 'admin';
+
+  const ctx = {
+    usuario, entidad, entidades, catalogoEntidades, riesgosCalc,
+    puedeEditar, esAdmin, abrirModal, cerrarModal, avisar, registrar, refrescarEntidades
+  };
+
+  let contenido = null;
+  if (fase === 'cargando') {
+    contenido = (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3">
+        <div className="cargador-inicial" role="status" aria-label="Cargando"></div>
+        <p className="text-sm text-slate-500">Conectando…</p>
+      </div>
+    );
+  } else if (fase === 'configurar') {
+    contenido = <PantallaConfiguracion errorInicio={errorInicio} alEntrarDemo={entrarDemo} />;
+  } else if (fase === 'acceso') {
+    contenido = <PantallaAcceso alIngresar={alIngresar} modoDemo={DB.modo === 'memoria'} />;
+  } else if (fase === 'bootstrap') {
+    contenido = <PantallaBootstrap alCrear={alIngresar} />;
+  } else if (fase === 'seleccion') {
+    contenido = (
+      <SelectorEntidad usuario={usuario} entidades={entidades} alElegir={elegirEntidad}
+        alNuevaEntidad={() => abrirModal({ tipo: 'entidad', props: {} })} alSalir={salir} esAdmin={esAdmin} />
+    );
+  } else if (fase === 'listo' && entidad) {
+    const pestanias = esAdmin ? [...PESTANIAS, ['admin', 'Administración']] : PESTANIAS;
+    contenido = (
+      <div className="min-h-screen">
+        <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur dark:border-slate-700 dark:bg-slate-900/95">
+          <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 sm:px-6">
+            <LogoMatriz className="h-9 w-9 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <h1 className="flex items-center gap-2 font-display text-base font-bold leading-tight text-tinta dark:text-slate-100">
+                Matriz de Riesgos
+                <span className="rounded bg-tinta-tenue px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-tinta dark:bg-slate-700 dark:text-slate-200">MIPG</span>
+              </h1>
+              <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                {entidad.sigla ? entidad.sigla + ' · ' : ''}{entidad.nombre}
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {DB.modo === 'memoria' && (
+                <span className="hidden rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-bold text-amber-800 sm:inline dark:bg-amber-900 dark:text-amber-200">Demo</span>
+              )}
+              {entidades.length > 1 && (
+                <button className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+                  onClick={() => setFase('seleccion')}>
+                  Cambiar entidad
+                </button>
+              )}
+              <button aria-label={oscuro ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'}
+                className="rounded-md p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                onClick={() => setOscuro(v => !v)}>
+                {oscuro ? <IcoSol className="h-5 w-5" /> : <IcoLuna className="h-5 w-5" />}
+              </button>
+              <span className="hidden items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600 md:inline-flex dark:bg-slate-800 dark:text-slate-300">
+                <strong>{usuario.nombre.split(' ')[0]}</strong>
+                <span className="text-slate-400">· {(ROLES.find(r => r.valor === usuario.rol) || {}).etiqueta || usuario.rol}</span>
+              </span>
+              <button aria-label="Salir" title="Salir"
+                className="rounded-md p-2 text-slate-500 hover:bg-slate-100 hover:text-red-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                onClick={salir}>
+                <IcoSalir className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+          <nav className="mx-auto max-w-7xl overflow-x-auto px-3 sm:px-6" aria-label="Secciones">
+            <div className="flex gap-1">
+              {pestanias.map(([clave, nombre]) => (
+                <button key={clave} onClick={() => setPestania(clave)}
+                  className={'whitespace-nowrap border-b-2 px-3 py-2 text-sm font-semibold transition-colors ' +
+                    (pestania === clave
+                      ? 'border-tinta text-tinta dark:border-tinta-claro dark:text-slate-100'
+                      : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200')}>
+                  {nombre}
+                </button>
+              ))}
+            </div>
+          </nav>
+        </header>
+
+        <main className="mx-auto max-w-7xl px-3 py-5 sm:px-6">
+          {pestania === 'panel' && <Panel riesgosCalc={riesgosCalc} abrirModal={abrirModal} puedeEditar={puedeEditar} />}
+          {pestania === 'riesgos' && <RiesgosTab riesgosCalc={riesgosCalc} ctx={ctx} />}
+          {pestania === 'mapa' && <MapaTab riesgosCalc={riesgosCalc} abrirModal={abrirModal} />}
+          {pestania === 'seguimiento' && <SeguimientoTab riesgosCalc={riesgosCalc} ctx={ctx} />}
+          {pestania === 'admin' && esAdmin && <AdminTab ctx={ctx} />}
+        </main>
+
+        <footer className="mx-auto max-w-7xl px-3 pb-6 sm:px-6">
+          <p className="border-t border-slate-200 pt-3 text-center text-[11px] text-slate-400 dark:border-slate-800">
+            Matriz de Riesgos MIPG · metodología de la Guía para la administración del riesgo (DAFP) · los datos se sincronizan en tiempo real
+          </p>
+        </footer>
+
+        <BotonSubir />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {contenido}
+      <PilaModales modales={modales} cerrarModal={cerrarModal} ctx={ctx} />
+      <Avisos avisos={avisos} />
+    </>
+  );
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
