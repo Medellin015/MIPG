@@ -29,6 +29,10 @@
        entidades/{id}/historial/{h} → bitácora automática de cambios
        riesgos/{id}                 → riesgos (campo entidadId), con arrays
                                       de controles, plan de acción y seguimientos
+       autodiagnosticos/{id}        → autodiagnóstico MIPG por política (entidadId)
+       paac/{id}                    → actividades del PAAC con cortes cuatrimestrales
+       planes/{id}                  → actividades de los 12 planes del Decreto 612
+       furag/{id}                   → resultados FURAG por vigencia y política
 
      REGLAS DE FIRESTORE SUGERIDAS (pegar en la pestaña Reglas)
      ------------------------------------------------------------------
@@ -46,6 +50,10 @@
            match /historial/{h}  { allow read, create: if sesionFirmada(); }
          }
          match /riesgos/{id}     { allow read, write: if sesionFirmada(); }
+         match /autodiagnosticos/{id} { allow read, write: if sesionFirmada(); }
+         match /paac/{id}        { allow read, write: if sesionFirmada(); }
+         match /planes/{id}      { allow read, write: if sesionFirmada(); }
+         match /furag/{id}       { allow read, write: if sesionFirmada(); }
          match /{documento=**}   { allow read, write: if false; }
        }
      }
@@ -323,11 +331,33 @@ const BackendFirestore = {
     const res = await db.collection('entidades').doc(entidadId)
       .collection('historial').orderBy('fecha', 'desc').limit(limite || 300).get();
     return res.docs.map(d => ({ id: d.id, ...d.data() }));
+  },
+
+  /* Operaciones genéricas de los módulos MIPG. Se consulta solo por entidadId
+     (una igualdad: no requiere índices compuestos) y se filtra en el cliente. */
+  async listarDe(coleccion, entidadId) {
+    const db = await this.listo();
+    const res = await db.collection(coleccion).where('entidadId', '==', entidadId).get();
+    return res.docs.map(d => ({ id: d.id, ...d.data() }));
+  },
+  async crearDe(coleccion, datos) {
+    const db = await this.listo();
+    const ref = await db.collection(coleccion).add(datos);
+    return ref.id;
+  },
+  async actualizarDe(coleccion, id, parciales) {
+    const db = await this.listo();
+    await db.collection(coleccion).doc(id).update(parciales);
+  },
+  async eliminarDe(coleccion, id) {
+    const db = await this.listo();
+    await db.collection(coleccion).doc(id).delete();
   }
 };
 
 /* ===== 2.3 Backend en memoria (modo demostración) ===== */
-const MEM = { usuarios: [], entidades: [], riesgos: [], historial: {}, oyentes: [] };
+const MEM = { usuarios: [], entidades: [], riesgos: [], historial: {}, oyentes: [],
+  tablas: { autodiagnosticos: [], paac: [], planes: [], furag: [] } };
 
 const emitirRiesgos = (entidadId) => {
   MEM.oyentes
@@ -388,6 +418,23 @@ const BackendMemoria = {
   },
   async listarHistorial(entidadId, limite) {
     return clonar((MEM.historial[entidadId] || []).slice(0, limite || 300));
+  },
+
+  /* Operaciones genéricas de los módulos MIPG (colecciones simples por entidad) */
+  async listarDe(coleccion, entidadId) {
+    return clonar((MEM.tablas[coleccion] || []).filter(x => x.entidadId === entidadId));
+  },
+  async crearDe(coleccion, datos) {
+    const id = idMem(coleccion.slice(0, 3));
+    (MEM.tablas[coleccion] = MEM.tablas[coleccion] || []).push({ id, ...clonar(datos) });
+    return id;
+  },
+  async actualizarDe(coleccion, id, parciales) {
+    const x = (MEM.tablas[coleccion] || []).find(y => y.id === id);
+    if (x) Object.assign(x, clonar(parciales));
+  },
+  async eliminarDe(coleccion, id) {
+    MEM.tablas[coleccion] = (MEM.tablas[coleccion] || []).filter(y => y.id !== id);
   }
 };
 
@@ -525,6 +572,81 @@ async function sembrarDemostracion() {
     { id: idMem('his'), fecha: ahora, usuario: 'admin', riesgoCodigo: '', accion: 'Inicio',
       detalle: 'Se cargaron los datos de demostración.' }
   ] };
+
+  /* --- Semilla de los módulos MIPG (ids de política = sección 3.13) --- */
+  const POLS = ['planeacion', 'presupuesto', 'compras', 'talento', 'integridad',
+    'transparencia', 'fortalecimiento', 'servicio', 'participacion', 'tramites',
+    'documental', 'gob_digital', 'seg_digital', 'defensa', 'conocimiento',
+    'control_interno', 'seguimiento', 'mejora_normativa', 'estadistica'];
+  const armaValores = (v) => Object.fromEntries(POLS.map((p, i) => [p, v[i]]));
+
+  MEM.tablas.autodiagnosticos = [
+    { id: idMem('aut'), entidadId: 'ent_demo', politicaId: 'talento',
+      valores: { 0: 80, 1: 80, 2: 60, 3: 60, 4: 80 },
+      observaciones: { 2: 'PIC en actualización con Función Pública' },
+      cortes: [{ fecha: anio + '-02-15', puntaje: 60, usuario: 'admin' }],
+      actualizadoEn: ahora, actualizadoPor: 'admin' },
+    { id: idMem('aut'), entidadId: 'ent_demo', politicaId: 'transparencia',
+      valores: { 0: 60, 1: 40, 2: 60, 3: 40, 4: 60 }, observaciones: {},
+      cortes: [], actualizadoEn: ahora, actualizadoPor: 'admin' },
+    { id: idMem('aut'), entidadId: 'ent_demo', politicaId: 'control_interno',
+      valores: { 0: 80, 1: 80, 2: 80, 3: 60, 4: 100 }, observaciones: {},
+      cortes: [{ fecha: (anio - 1) + '-11-30', puntaje: 68, usuario: 'admin' },
+               { fecha: anio + '-03-30', puntaje: 80, usuario: 'admin' }],
+      actualizadoEn: ahora, actualizadoPor: 'admin' }
+  ];
+
+  MEM.tablas.paac = [
+    { id: idMem('pac'), entidadId: 'ent_demo', anio, componente: 1, subcomponente: 'Monitoreo del mapa de riesgos',
+      actividad: 'Actualizar y publicar el mapa de riesgos de corrupción', meta: 'Mapa publicado',
+      responsable: 'Oficina de Planeación', fechaFin: anio + '-01-31',
+      cortes: [{ corte: 'C1', avance: 100, observacion: 'Publicado en la página institucional.', fecha: anio + '-04-30', usuario: 'admin' }], creadoEn: ahora },
+    { id: idMem('pac'), entidadId: 'ent_demo', anio, componente: 2, subcomponente: 'Racionalización tecnológica',
+      actividad: 'Poner en línea el trámite de certificados laborales', meta: 'Trámite 100% en línea',
+      responsable: 'Líder TIC', fechaFin: anio + '-08-31',
+      cortes: [{ corte: 'C1', avance: 30, observacion: 'Formulario en pruebas.', fecha: anio + '-04-30', usuario: 'admin' }], creadoEn: ahora },
+    { id: idMem('pac'), entidadId: 'ent_demo', anio, componente: 3, subcomponente: 'Diálogo de doble vía',
+      actividad: 'Realizar la audiencia pública de rendición de cuentas', meta: '1 audiencia realizada',
+      responsable: 'Oficina de Planeación', fechaFin: anio + '-11-30', cortes: [], creadoEn: ahora },
+    { id: idMem('pac'), entidadId: 'ent_demo', anio, componente: 4, subcomponente: 'Relacionamiento con el ciudadano',
+      actividad: 'Medir la satisfacción ciudadana cada trimestre', meta: '4 mediciones',
+      responsable: 'Atención al Ciudadano', fechaFin: anio + '-12-15',
+      cortes: [{ corte: 'C1', avance: 25, observacion: 'Primera medición aplicada.', fecha: anio + '-04-30', usuario: 'admin' }], creadoEn: ahora },
+    { id: idMem('pac'), entidadId: 'ent_demo', anio, componente: 5, subcomponente: 'Lineamientos de transparencia activa',
+      actividad: 'Actualizar el esquema de publicación de información', meta: 'Esquema actualizado',
+      responsable: 'Secretaría General', fechaFin: anio + '-05-31',
+      cortes: [{ corte: 'C1', avance: 60, observacion: 'Pendiente aprobación del comité.', fecha: anio + '-04-30', usuario: 'admin' }], creadoEn: ahora },
+    { id: idMem('pac'), entidadId: 'ent_demo', anio, componente: 5, subcomponente: 'Datos abiertos',
+      actividad: 'Publicar los conjuntos de datos abiertos priorizados', meta: '3 conjuntos publicados',
+      responsable: 'Líder TIC', fechaFin: anio + '-09-30',
+      cortes: [{ corte: 'C1', avance: 40, observacion: 'Un conjunto publicado.', fecha: anio + '-04-30', usuario: 'admin' }], creadoEn: ahora },
+    { id: idMem('pac'), entidadId: 'ent_demo', anio, componente: 6, subcomponente: 'Integridad',
+      actividad: 'Socializar el código de integridad con todo el personal', meta: '100% del personal',
+      responsable: 'Talento Humano', fechaFin: anio + '-07-31',
+      cortes: [{ corte: 'C1', avance: 50, observacion: 'Dos jornadas realizadas.', fecha: anio + '-04-30', usuario: 'admin' }], creadoEn: ahora }
+  ];
+
+  MEM.tablas.planes = [
+    { id: idMem('pla'), entidadId: 'ent_demo', anio, planId: 2, actividad: 'Publicar el Plan Anual de Adquisiciones en el SECOP',
+      responsable: 'Contratación', fechaFin: anio + '-01-31', avance: 100, evidencia: 'SECOP II', creadoEn: ahora },
+    { id: idMem('pla'), entidadId: 'ent_demo', anio, planId: 6, actividad: 'Diagnóstico de necesidades de capacitación',
+      responsable: 'Talento Humano', fechaFin: anio + '-02-28', avance: 100, evidencia: 'Informe DNC', creadoEn: ahora },
+    { id: idMem('pla'), entidadId: 'ent_demo', anio, planId: 6, actividad: 'Ejecutar el cronograma de capacitaciones del semestre',
+      responsable: 'Talento Humano', fechaFin: anio + '-06-30', avance: 60, evidencia: '', creadoEn: ahora },
+    { id: idMem('pla'), entidadId: 'ent_demo', anio, planId: 8, actividad: 'Realizar el simulacro anual de evacuación',
+      responsable: 'SG-SST', fechaFin: anio + '-05-31', avance: 30, evidencia: '', creadoEn: ahora },
+    { id: idMem('pla'), entidadId: 'ent_demo', anio, planId: 10, actividad: 'Actualizar el catálogo de sistemas de información',
+      responsable: 'Líder TIC', fechaFin: anio + '-10-31', avance: 50, evidencia: '', creadoEn: ahora },
+    { id: idMem('pla'), entidadId: 'ent_demo', anio, planId: 1, actividad: 'Elaborar las tablas de retención documental',
+      responsable: 'Gestión Documental', fechaFin: anio + '-11-30', avance: 20, evidencia: '', creadoEn: ahora }
+  ];
+
+  MEM.tablas.furag = [
+    { id: idMem('fur'), entidadId: 'ent_demo', vigencia: anio - 2, indice: 61,
+      valores: armaValores([62, 70, 68, 66, 60, 58, 64, 63, 55, 60, 57, 65, 52, 72, 54, 66, 61, 50, 48]), creadoEn: ahora },
+    { id: idMem('fur'), entidadId: 'ent_demo', vigencia: anio - 1, indice: 67,
+      valores: armaValores([68, 74, 72, 71, 66, 63, 69, 70, 62, 66, 64, 72, 60, 75, 60, 73, 68, 58, 55]), creadoEn: ahora }
+  ];
 }
 
 /* ===== 2.5 API pública ===== */
@@ -562,7 +684,18 @@ window.DB = {
   agregarSeguimiento: (...a) => backendActivo.agregarSeguimiento(...a),
 
   registrarHistorial: (...a) => backendActivo.registrarHistorial(...a),
-  listarHistorial: (...a) => backendActivo.listarHistorial(...a)
+  listarHistorial: (...a) => backendActivo.listarHistorial(...a),
+
+  /* Módulos MIPG: solo se permiten estas colecciones */
+  _validar(coleccion) {
+    if (!['autodiagnosticos', 'paac', 'planes', 'furag'].includes(coleccion)) {
+      throw new Error('Colección no permitida: ' + coleccion);
+    }
+  },
+  listarDe(coleccion, entidadId) { this._validar(coleccion); return backendActivo.listarDe(coleccion, entidadId); },
+  crearDe(coleccion, datos) { this._validar(coleccion); return backendActivo.crearDe(coleccion, datos); },
+  actualizarDe(coleccion, id, p) { this._validar(coleccion); return backendActivo.actualizarDe(coleccion, id, p); },
+  eliminarDe(coleccion, id) { this._validar(coleccion); return backendActivo.eliminarDe(coleccion, id); }
 };
 </script>
 
@@ -2694,7 +2827,7 @@ const AdminTab = ({ ctx }) => {
           <div className="max-h-96 overflow-auto">
             <table className="w-full min-w-[680px] text-xs">
               <thead className="sticky top-0 bg-white text-left uppercase tracking-wide text-slate-400 dark:bg-slate-900">
-                <tr><th className="py-2 pr-3">Fecha</th><th className="py-2 pr-3">Usuario</th><th className="py-2 pr-3">Riesgo</th>
+                <tr><th className="py-2 pr-3">Fecha</th><th className="py-2 pr-3">Usuario</th><th className="py-2 pr-3">Referencia</th>
                   <th className="py-2 pr-3">Acción</th><th className="py-2">Detalle</th></tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -2957,6 +3090,11 @@ const PilaModales = ({ modales, cerrarModal, ctx }) => (
         case 'importar-resumen': return <ModalImportarResumen key={m.id} {...comunes} />;
         case 'entidad': return <ModalEntidad key={m.id} {...comunes} />;
         case 'usuario': return <ModalUsuario key={m.id} {...comunes} />;
+        case 'politica': return <ModalPolitica key={m.id} {...comunes} />;
+        case 'paac-actividad': return <ModalActividadPaac key={m.id} {...comunes} />;
+        case 'paac-corte': return <ModalCortePaac key={m.id} {...comunes} />;
+        case 'plan612': return <ModalPlan612 key={m.id} {...comunes} />;
+        case 'furag': return <ModalFurag key={m.id} {...comunes} />;
         default: return null;
       }
     })}
@@ -2981,7 +3119,8 @@ const BotonSubir = () => {
 };
 
 const PESTANIAS = [
-  ['panel', 'Panel'], ['riesgos', 'Riesgos'], ['mapa', 'Mapa de calor'], ['seguimiento', 'Seguimiento']
+  ['panel', 'Panel'], ['riesgos', 'Riesgos'], ['mapa', 'Mapa'], ['seguimiento', 'Seguimiento'],
+  ['autodiag', 'Autodiagnóstico'], ['paac', 'PAAC'], ['planes', 'Planes 612'], ['furag', 'FURAG']
 ];
 
 const App = () => {
@@ -2992,6 +3131,7 @@ const App = () => {
   const [entidades, setEntidades] = useState([]);
   const [entidad, setEntidad] = useState(null);
   const [riesgos, setRiesgos] = useState([]);
+  const [datosMipg, setDatosMipg] = useState(null); // { autodiagnosticos, paac, planes, furag }
   const [pestania, setPestania] = useState('panel');
   const [modales, setModales] = useState([]);
   const [avisos, setAvisos] = useState([]);
@@ -3065,6 +3205,28 @@ const App = () => {
     }
   }, [usuario, entidad]);
 
+  /* Datos de los módulos MIPG: se cargan al elegir entidad y se recargan tras cada cambio */
+  const recargarMipg = useCallback(async () => {
+    if (!entidad) return;
+    try {
+      const [autodiagnosticos, paac, planes, furag] = await Promise.all([
+        DB.listarDe('autodiagnosticos', entidad.id), DB.listarDe('paac', entidad.id),
+        DB.listarDe('planes', entidad.id), DB.listarDe('furag', entidad.id)
+      ]);
+      setDatosMipg({ autodiagnosticos, paac, planes, furag });
+    } catch (e) {
+      console.error('Módulos MIPG:', e);
+      setDatosMipg({ autodiagnosticos: [], paac: [], planes: [], furag: [] });
+      avisar('No fue posible cargar los módulos MIPG', 'error');
+    }
+  }, [entidad ? entidad.id : null]);
+
+  useEffect(() => {
+    if (fase !== 'listo' || !entidad) return;
+    setDatosMipg(null);
+    recargarMipg();
+  }, [fase, entidad ? entidad.id : null]);
+
   const elegirEntidad = (e) => { setRiesgos([]); setEntidad(e); setPestania('panel'); setFase('listo'); };
 
   const alIngresar = async (u) => {
@@ -3094,6 +3256,7 @@ const App = () => {
 
   const ctx = {
     usuario, entidad, entidades, catalogoEntidades, riesgosCalc,
+    datosMipg, recargarMipg, irA: setPestania,
     puedeEditar, esAdmin, abrirModal, cerrarModal, avisar, registrar, refrescarEntidades
   };
 
@@ -3174,10 +3337,19 @@ const App = () => {
         </header>
 
         <main className="mx-auto max-w-7xl px-3 py-5 sm:px-6">
-          {pestania === 'panel' && <Panel riesgosCalc={riesgosCalc} abrirModal={abrirModal} puedeEditar={puedeEditar} />}
+          {pestania === 'panel' && (
+            <>
+              <EstadoMipg ctx={ctx} />
+              <Panel riesgosCalc={riesgosCalc} abrirModal={abrirModal} puedeEditar={puedeEditar} />
+            </>
+          )}
           {pestania === 'riesgos' && <RiesgosTab riesgosCalc={riesgosCalc} ctx={ctx} />}
           {pestania === 'mapa' && <MapaTab riesgosCalc={riesgosCalc} abrirModal={abrirModal} />}
           {pestania === 'seguimiento' && <SeguimientoTab riesgosCalc={riesgosCalc} ctx={ctx} />}
+          {pestania === 'autodiag' && <AutodiagnosticoTab ctx={ctx} />}
+          {pestania === 'paac' && <PaacTab ctx={ctx} />}
+          {pestania === 'planes' && <PlanesTab ctx={ctx} />}
+          {pestania === 'furag' && <FuragTab ctx={ctx} />}
           {pestania === 'admin' && esAdmin && <AdminTab ctx={ctx} />}
         </main>
 
@@ -3201,6 +3373,1273 @@ const App = () => {
   );
 };
 
+/* ============================================================
+   EXTENSIÓN MIPG — secciones 3.13 a 3.18 (el montaje va al final)
+   ============================================================ */
+
+/* ===== 3.13 Catálogos MIPG: dimensiones, políticas, PAAC y Decreto 612 ===== */
+
+const DIMENSIONES = {
+  1: 'Talento Humano', 2: 'Direccionamiento Estratégico y Planeación',
+  3: 'Gestión con Valores para Resultados', 4: 'Evaluación de Resultados',
+  5: 'Información y Comunicación', 6: 'Gestión del Conocimiento y la Innovación',
+  7: 'Control Interno'
+};
+
+/* 19 políticas de gestión y desempeño. Los criterios son una base orientadora
+   (5 por política) inspirada en los autodiagnósticos del DAFP; se pueden
+   ajustar editando esta constante. Los ids deben coincidir con la semilla. */
+const POLITICAS = [
+  { id: 'planeacion', nombre: 'Planeación institucional', dim: 2, criterios: [
+    'Plan estratégico y plan de acción formulados con metas e indicadores medibles',
+    'Participación de los grupos de valor en la formulación de los planes',
+    'Los 12 planes del Decreto 612 integrados al plan de acción',
+    'Seguimiento periódico al plan de acción con evidencias',
+    'Los resultados del seguimiento alimentan ajustes y decisiones' ] },
+  { id: 'presupuesto', nombre: 'Gestión presupuestal y eficiencia del gasto', dim: 2, criterios: [
+    'Anteproyecto de presupuesto articulado con la planeación institucional',
+    'Ejecución presupuestal monitoreada con informes periódicos',
+    'PAC programado y controlado durante la vigencia',
+    'Lineamientos de austeridad del gasto aplicados y reportados',
+    'Cierre presupuestal oportuno con reservas y vigencias controladas' ] },
+  { id: 'compras', nombre: 'Compras y contratación pública', dim: 2, criterios: [
+    'Plan Anual de Adquisiciones publicado y actualizado en el SECOP',
+    'Procesos contractuales gestionados integralmente en SECOP II',
+    'Uso de agregación de demanda y pliegos tipo cuando aplica',
+    'Supervisión contractual documentada con informes',
+    'Evaluación de proveedores y de la gestión contractual' ] },
+  { id: 'talento', nombre: 'Gestión estratégica del talento humano', dim: 1, criterios: [
+    'Plan Estratégico de Talento Humano según el ciclo de vida laboral',
+    'Vinculación y provisión de empleos conforme a la norma (SIGEP al día)',
+    'Plan Institucional de Capacitación ejecutado según diagnóstico',
+    'Bienestar e incentivos con cobertura y medición',
+    'Evaluación del desempeño aplicada y con planes de mejora' ] },
+  { id: 'integridad', nombre: 'Integridad', dim: 1, criterios: [
+    'Código de integridad adoptado y socializado',
+    'Gestores de integridad designados y activos',
+    'Declaración y gestión de conflictos de interés',
+    'Actividades pedagógicas de integridad ejecutadas',
+    'Canales de denuncia interna conocidos y en operación' ] },
+  { id: 'transparencia', nombre: 'Transparencia y acceso a la información', dim: 5, criterios: [
+    'Sección web de transparencia conforme a la Ley 1712 y la Res. 1519',
+    'Esquema de publicación e índice de información clasificada actualizados',
+    'Respuesta oportuna a las solicitudes de acceso a la información',
+    'Datos abiertos publicados y actualizados',
+    'Informe de solicitudes de acceso publicado periódicamente' ] },
+  { id: 'fortalecimiento', nombre: 'Fortalecimiento organizacional y simplificación', dim: 3, criterios: [
+    'Mapa de procesos actualizado y adoptado',
+    'Procesos documentados (caracterizaciones y procedimientos) y aplicados',
+    'Estructura y planta acordes con las funciones y capacidades',
+    'Indicadores de proceso medidos y analizados',
+    'Mejoras de procesos implementadas a partir del análisis' ] },
+  { id: 'servicio', nombre: 'Servicio al ciudadano', dim: 3, criterios: [
+    'Caracterización de ciudadanos, usuarios y grupos de valor',
+    'Canales de atención accesibles e incluyentes',
+    'PQRSD respondidas dentro de términos y con control',
+    'Medición periódica de la satisfacción y uso de resultados',
+    'Cualificación del personal de servicio al ciudadano' ] },
+  { id: 'participacion', nombre: 'Participación ciudadana en la gestión', dim: 3, criterios: [
+    'Estrategia anual de participación ciudadana formulada',
+    'Ejercicios de participación en todo el ciclo de la gestión',
+    'Rendición de cuentas permanente con espacios de diálogo',
+    'Respuesta a los compromisos adquiridos con la ciudadanía',
+    'Evaluación y divulgación de los resultados de la participación' ] },
+  { id: 'tramites', nombre: 'Racionalización de trámites', dim: 3, criterios: [
+    'Inventario de trámites inscrito y actualizado en el SUIT',
+    'Estrategia de racionalización formulada en el PAAC',
+    'Racionalizaciones normativas, administrativas o tecnológicas implementadas',
+    'Trámites disponibles parcial o totalmente en línea',
+    'Medición de los beneficios de la racionalización para el usuario' ] },
+  { id: 'documental', nombre: 'Gestión documental', dim: 5, criterios: [
+    'PGD y PINAR formulados y aprobados',
+    'Tablas de retención documental convalidadas y aplicadas',
+    'Archivos de gestión y central organizados según las TRD',
+    'Instrumentos archivísticos (CCD, inventarios) actualizados',
+    'Preservación digital y transferencias documentales realizadas' ] },
+  { id: 'gob_digital', nombre: 'Gobierno digital', dim: 3, criterios: [
+    'PETI formulado y en ejecución',
+    'Servicios ciudadanos digitales e interoperabilidad implementados',
+    'Trámites y servicios digitalizados para el usuario',
+    'Arquitectura y gobierno de TI adoptados',
+    'Uso y apropiación de TI medidos en la entidad' ] },
+  { id: 'seg_digital', nombre: 'Seguridad digital', dim: 3, criterios: [
+    'Política y modelo de seguridad y privacidad (MSPI) adoptados',
+    'Inventario y clasificación de activos de información',
+    'Plan de tratamiento de riesgos de seguridad digital en ejecución',
+    'Gestión de incidentes con procedimiento y registro',
+    'Continuidad: copias, pruebas de restauración y plan de recuperación' ] },
+  { id: 'defensa', nombre: 'Defensa jurídica', dim: 3, criterios: [
+    'Comité de conciliación operando con políticas de prevención del daño',
+    'Procesos judiciales registrados y actualizados (eKOGUI si aplica)',
+    'Provisión contable del contingente judicial actualizada',
+    'Análisis de causas de litigiosidad y acciones preventivas',
+    'Ejercicio oportuno de la acción de repetición cuando procede' ] },
+  { id: 'conocimiento', nombre: 'Gestión del conocimiento y la innovación', dim: 6, criterios: [
+    'Conocimiento crítico identificado y documentado',
+    'Mecanismos de transferencia: relevos, comunidades, repositorios',
+    'Analítica institucional para la toma de decisiones',
+    'Iniciativas de innovación probadas o implementadas',
+    'Cultura de compartir y difundir el conocimiento' ] },
+  { id: 'control_interno', nombre: 'Control interno', dim: 7, criterios: [
+    'MECI operando con sus cinco componentes',
+    'Esquema de líneas de defensa asignado y funcionando',
+    'Plan anual de auditoría basado en riesgos ejecutado',
+    'Evaluación independiente e informes semestrales presentados',
+    'Planes de mejoramiento con seguimiento efectivo' ] },
+  { id: 'seguimiento', nombre: 'Seguimiento y evaluación del desempeño', dim: 4, criterios: [
+    'Indicadores de resultado con línea base y meta',
+    'Mediciones periódicas documentadas',
+    'FURAG diligenciado y resultados analizados',
+    'Evaluaciones usadas para ajustar planes y presupuesto',
+    'Resultados publicados a los grupos de valor' ] },
+  { id: 'mejora_normativa', nombre: 'Mejora normativa', dim: 3, criterios: [
+    'Inventario y depuración del marco normativo propio',
+    'Análisis de impacto normativo previo a nuevas regulaciones',
+    'Participación ciudadana en los proyectos normativos',
+    'Agenda regulatoria publicada cuando aplica',
+    'Lenguaje claro y simplificación en los actos administrativos' ] },
+  { id: 'estadistica', nombre: 'Gestión de la información estadística', dim: 5, criterios: [
+    'Inventario de operaciones estadísticas y registros administrativos',
+    'Aplicación de lineamientos y estándares de calidad (DANE)',
+    'Anonimización y protección de datos en la difusión',
+    'Interoperabilidad y aprovechamiento de registros administrativos',
+    'Fortalecimiento de capacidades estadísticas del personal' ] }
+];
+const politicaPorId = (id) => POLITICAS.find(p => p.id === id);
+
+/* Escala del autodiagnóstico (estilo DAFP, seleccionable en móvil) */
+const ESCALA_AUTODIAG = [
+  { valor: 0, etiqueta: 'Sin avance' }, { valor: 20, etiqueta: 'Incipiente' },
+  { valor: 40, etiqueta: 'Básico' }, { valor: 60, etiqueta: 'Intermedio' },
+  { valor: 80, etiqueta: 'Avanzado' }, { valor: 100, etiqueta: 'Consolidado' }
+];
+
+/* Semáforo de puntajes 0-100 (reutiliza los colores DAFP de las zonas) */
+const colorPuntaje = (p) => p == null ? { color: '#94A3B8', textoOscuro: false }
+  : p >= 80 ? ZONAS.Bajo : p >= 60 ? ZONAS.Moderado : p >= 40 ? ZONAS.Alto : ZONAS.Extremo;
+
+const ChipPuntaje = ({ p, grande }) => {
+  const c = colorPuntaje(p);
+  return (
+    <span className={'inline-flex items-center justify-center rounded-full font-bold ' +
+        (grande ? 'h-11 min-w-[44px] px-2 text-base ' : 'h-6 min-w-[34px] px-1.5 text-xs ') +
+        (c.textoOscuro ? 'text-slate-900' : 'text-white')}
+      style={{ backgroundColor: c.color }}>
+      {p == null ? '—' : p}
+    </span>
+  );
+};
+
+const puntajeAutodiag = (doc, politica) => {
+  if (!doc || !doc.valores || !Object.keys(doc.valores).length) return null;
+  const n = politica.criterios.length;
+  let suma = 0;
+  for (let i = 0; i < n; i++) suma += (+doc.valores[i] || 0);
+  return Math.round(suma / n);
+};
+
+const PAAC_COMPONENTES = {
+  1: 'Gestión del riesgo de corrupción', 2: 'Racionalización de trámites',
+  3: 'Rendición de cuentas', 4: 'Atención al ciudadano',
+  5: 'Transparencia y acceso a la información', 6: 'Iniciativas adicionales'
+};
+const CORTES_PAAC = [
+  { id: 'C1', etiqueta: 'Corte 1 (ene–abr)' },
+  { id: 'C2', etiqueta: 'Corte 2 (may–ago)' },
+  { id: 'C3', etiqueta: 'Corte 3 (sep–dic)' }
+];
+const ORDEN_CORTE = { C1: 1, C2: 2, C3: 3 };
+const avancePaac = (a) => {
+  const cs = a.cortes || [];
+  if (!cs.length) return 0;
+  const ultimo = [...cs].sort((x, y) => (ORDEN_CORTE[x.corte] || 0) - (ORDEN_CORTE[y.corte] || 0)).pop();
+  return Math.max(0, Math.min(100, +ultimo.avance || 0));
+};
+const actividadVencida = (fechaFin, avance) => !!fechaFin && (+avance || 0) < 100 && fechaFin < hoyISO();
+
+/* Los 12 planes del Decreto 612 de 2018 */
+const PLANES_612 = [
+  { id: 1, nombre: 'Plan Institucional de Archivos (PINAR)' },
+  { id: 2, nombre: 'Plan Anual de Adquisiciones' },
+  { id: 3, nombre: 'Plan Anual de Vacantes' },
+  { id: 4, nombre: 'Plan de Previsión de Recursos Humanos' },
+  { id: 5, nombre: 'Plan Estratégico de Talento Humano' },
+  { id: 6, nombre: 'Plan Institucional de Capacitación' },
+  { id: 7, nombre: 'Plan de Bienestar e Incentivos' },
+  { id: 8, nombre: 'Plan de Trabajo Anual en SG-SST' },
+  { id: 9, nombre: 'Plan Anticorrupción y de Atención al Ciudadano', desdePaac: true },
+  { id: 10, nombre: 'Plan Estratégico de Tecnologías de la Información (PETI)' },
+  { id: 11, nombre: 'Plan de Tratamiento de Riesgos de Seguridad de la Información' },
+  { id: 12, nombre: 'Plan de Seguridad y Privacidad de la Información' }
+];
+
+/* Exportador genérico de libros de Excel con plan B en CSV */
+const exportarLibro = (nombreArchivo, hojas, avisar) => {
+  try {
+    if (typeof XLSX === 'undefined') throw new Error('XLSX no disponible');
+    const wb = XLSX.utils.book_new();
+    hojas.forEach(h => XLSX.utils.book_append_sheet(wb, hojaDesdeMatriz(h.filas, h.anchos, h.zonasEnCols), h.nombre));
+    XLSX.writeFile(wb, nombreArchivo + '.xlsx');
+    avisar('Excel exportado');
+  } catch (e) {
+    console.warn('Exportación XLSX falló, se usa CSV:', e);
+    const filas = hojas[0].filas;
+    const csv = '\ufeff' + filas.map(f => f.map(v => '"' + String(v ?? '').replace(/"/g, '""') + '"').join(';')).join('\r\n');
+    descargarBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), nombreArchivo + '.csv');
+    avisar('Sin librería de Excel: se exportó CSV', 'info');
+  }
+};
+
+/* Resumen "Estado MIPG" que corona el Panel: cuatro accesos con semáforo */
+const EstadoMipg = ({ ctx }) => {
+  const d = ctx.datosMipg;
+  const anio = new Date().getFullYear();
+  let autod = null, nDilig = 0, paacPct = null, nPaac = 0, planesPct = null, nPlanes = 0, furagUlt = null, furagVig = null;
+  if (d) {
+    const puntajes = POLITICAS
+      .map(p => puntajeAutodiag(d.autodiagnosticos.find(x => x.politicaId === p.id), p))
+      .filter(x => x != null);
+    nDilig = puntajes.length;
+    if (puntajes.length) autod = Math.round(puntajes.reduce((a, b) => a + b, 0) / puntajes.length);
+    const pa = d.paac.filter(x => +x.anio === anio);
+    nPaac = pa.length;
+    if (pa.length) paacPct = Math.round(pa.reduce((s, a) => s + avancePaac(a), 0) / pa.length);
+    const pl = d.planes.filter(x => +x.anio === anio);
+    nPlanes = pl.length;
+    if (pl.length) planesPct = Math.round(pl.reduce((s, a) => s + (+a.avance || 0), 0) / pl.length);
+    const fs = [...d.furag].sort((a, b) => (+b.vigencia) - (+a.vigencia));
+    if (fs.length) { furagUlt = fs[0].indice; furagVig = fs[0].vigencia; }
+  }
+
+  const Mini = ({ etiqueta, valor, sub, destino }) => (
+    <button onClick={() => ctx.irA(destino)}
+      className="rounded-lg border border-slate-200 bg-white p-3 text-left transition-colors hover:border-tinta hover:bg-tinta-tenue dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{etiqueta}</p>
+      <p className="mt-1 font-display text-2xl font-bold" style={{ color: colorPuntaje(valor).color }}>
+        {valor == null ? '—' : valor}
+      </p>
+      <p className="text-[11px] text-slate-500 dark:text-slate-400">{sub}</p>
+    </button>
+  );
+
+  return (
+    <section className="animar-subir mb-5 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <TituloSeccion>Estado MIPG</TituloSeccion>
+        <span className="text-xs text-slate-400">vigencia {anio}</span>
+      </div>
+      {d === null ? (
+        <p className="text-sm text-slate-400" role="status">Cargando los módulos…</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Mini etiqueta="Autodiagnóstico" valor={autod} destino="autodiag"
+            sub={nDilig ? nDilig + '/19 políticas diligenciadas' : 'Sin diligenciar'} />
+          <Mini etiqueta="PAAC" valor={paacPct} destino="paac"
+            sub={nPaac ? nPaac + ' actividades · % promedio' : 'Sin actividades ' + anio} />
+          <Mini etiqueta="Planes Decreto 612" valor={planesPct} destino="planes"
+            sub={nPlanes ? nPlanes + ' actividades · % promedio' : 'Sin actividades ' + anio} />
+          <Mini etiqueta="FURAG" valor={furagUlt} destino="furag"
+            sub={furagVig ? 'Índice de desempeño ' + furagVig : 'Sin resultados registrados'} />
+        </div>
+      )}
+    </section>
+  );
+};
+
+/* ===== 3.14 Pestaña Autodiagnóstico MIPG ===== */
+
+const AutodiagnosticoTab = ({ ctx }) => {
+  const d = ctx.datosMipg;
+  if (d === null) {
+    return <p className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400 dark:border-slate-700 dark:bg-slate-900" role="status">Cargando el autodiagnóstico…</p>;
+  }
+  const docPara = (polId) => d.autodiagnosticos.find(x => x.politicaId === polId);
+  const filasPol = POLITICAS.map(p => ({ p, doc: docPara(p.id), puntaje: puntajeAutodiag(docPara(p.id), p) }));
+  const diligenciadas = filasPol.filter(x => x.puntaje != null);
+  const promedio = diligenciadas.length
+    ? Math.round(diligenciadas.reduce((s, x) => s + x.puntaje, 0) / diligenciadas.length) : null;
+
+  const porDimension = Object.keys(DIMENSIONES).map(k => {
+    const dim = +k;
+    const conDatos = filasPol.filter(x => x.p.dim === dim && x.puntaje != null);
+    return { dim, nombre: DIMENSIONES[dim],
+      puntaje: conDatos.length ? Math.round(conDatos.reduce((s, x) => s + x.puntaje, 0) / conDatos.length) : null };
+  });
+
+  const exportar = () => {
+    const filasResumen = [['Dimensión', 'Política', 'Puntaje', 'Criterios calificados', 'Última actualización']];
+    filasPol.forEach(x => filasResumen.push([DIMENSIONES[x.p.dim], x.p.nombre,
+      x.puntaje == null ? '' : x.puntaje,
+      x.doc ? Object.keys(x.doc.valores || {}).length + '/' + x.p.criterios.length : '0/' + x.p.criterios.length,
+      x.doc ? formatearFecha((x.doc.actualizadoEn || '').slice(0, 10)) : '']));
+    const filasDetalle = [['Política', 'Criterio', 'Valor', 'Observación']];
+    filasPol.forEach(x => x.p.criterios.forEach((c, i) => filasDetalle.push([
+      x.p.nombre, c,
+      x.doc && x.doc.valores && x.doc.valores[i] != null ? x.doc.valores[i] : '',
+      (x.doc && x.doc.observaciones && x.doc.observaciones[i]) || ''])));
+    exportarLibro('autodiagnostico_mipg_' + (ctx.entidad.sigla || 'ENT').toLowerCase() + '_' + hoyISO(),
+      [{ nombre: 'Resumen', filas: filasResumen, anchos: [34, 44, 10, 18, 16] },
+       { nombre: 'Detalle', filas: filasDetalle, anchos: [40, 62, 8, 40] }], ctx.avisar);
+  };
+
+  return (
+    <div className="animar-subir space-y-5">
+      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <TituloSeccion>Autodiagnóstico por dimensión</TituloSeccion>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              Promedio general ({diligenciadas.length}/19)
+            </span>
+            <ChipPuntaje p={promedio} grande />
+            <button className={CLS_BOTON_SECUNDARIO} onClick={exportar}><IcoDescarga /> Exportar</button>
+          </div>
+        </div>
+        <ul className="space-y-2">
+          {porDimension.map(x => (
+            <li key={x.dim} className="flex items-center gap-3 text-sm">
+              <span className="w-52 shrink-0 truncate text-slate-600 dark:text-slate-300" title={x.nombre}>
+                {x.dim}. {x.nombre}
+              </span>
+              <span className="h-5 flex-1 overflow-hidden rounded bg-slate-100 dark:bg-slate-800">
+                <span className="block h-full rounded"
+                  style={{ width: Math.max(2, x.puntaje || 0) + '%', backgroundColor: colorPuntaje(x.puntaje).color }}></span>
+              </span>
+              <span className="w-10 text-right"><ChipPuntaje p={x.puntaje} /></span>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-3 border-t border-slate-100 pt-2 text-xs text-slate-400 dark:border-slate-800">
+          Cinco criterios base por política, calificados de 0 a 100. Toca una política para diligenciarla.
+        </p>
+      </section>
+
+      {Object.keys(DIMENSIONES).map(k => {
+        const dim = +k;
+        const delDim = filasPol.filter(x => x.p.dim === dim);
+        return (
+          <section key={dim}>
+            <h3 className="mb-2 px-1 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              Dimensión {dim} · {DIMENSIONES[dim]}
+            </h3>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {delDim.map(x => (
+                <button key={x.p.id}
+                  onClick={() => ctx.abrirModal({ tipo: 'politica', props: { politicaId: x.p.id } })}
+                  className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition-colors hover:border-tinta hover:bg-tinta-tenue dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800">
+                  <ChipPuntaje p={x.puntaje} grande />
+                  <span className="min-w-0 flex-1">
+                    <span className="linea-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">{x.p.nombre}</span>
+                    <span className="mt-0.5 block text-[11px] text-slate-500 dark:text-slate-400">
+                      {x.doc
+                        ? Object.keys(x.doc.valores || {}).length + '/' + x.p.criterios.length + ' criterios · ' +
+                          formatearFecha((x.doc.actualizadoEn || '').slice(0, 10)) +
+                          ((x.doc.cortes || []).length ? ' · ' + x.doc.cortes.length + ' corte(s)' : '')
+                        : 'Sin diligenciar'}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
+};
+
+/* --- Diligenciamiento de una política --- */
+const ModalPolitica = ({ props, alCerrar, ctx }) => {
+  const pol = politicaPorId(props.politicaId);
+  const doc = (ctx.datosMipg && ctx.datosMipg.autodiagnosticos.find(x => x.politicaId === props.politicaId)) || null;
+  const [valores, setValores] = useState(() => doc ? clonar(doc.valores || {}) : {});
+  const [obs, setObs] = useState(() => doc ? clonar(doc.observaciones || {}) : {});
+  const [error, setError] = useState('');
+  const [guardando, setGuardando] = useState(false);
+
+  const puntaje = puntajeAutodiag({ valores }, pol);
+  const ponValor = (i, v) => setValores(prev => {
+    const n = { ...prev };
+    if (v === '') delete n[i]; else n[i] = +v;
+    return n;
+  });
+
+  const guardar = async (conCorte) => {
+    if (!Object.keys(valores).length) { setError('Califica al menos un criterio.'); return; }
+    setGuardando(true); setError('');
+    try {
+      const ahora = new Date().toISOString();
+      const cortes = clonar((doc && doc.cortes) || []);
+      if (conCorte) cortes.push({ fecha: hoyISO(), puntaje, usuario: ctx.usuario.usuario });
+      const datos = {
+        entidadId: ctx.entidad.id, politicaId: pol.id, valores, observaciones: obs,
+        cortes, actualizadoEn: ahora, actualizadoPor: ctx.usuario.usuario
+      };
+      if (doc) await DB.actualizarDe('autodiagnosticos', doc.id, datos);
+      else await DB.crearDe('autodiagnosticos', datos);
+      ctx.registrar(conCorte ? 'Registró corte de autodiagnóstico' : 'Diligenció autodiagnóstico',
+        'MIPG', pol.nombre + ' · puntaje ' + puntaje);
+      ctx.avisar(pol.nombre + ': puntaje ' + puntaje + (conCorte ? ' (corte guardado)' : ''));
+      await ctx.recargarMipg();
+      alCerrar();
+    } catch (e) {
+      console.error(e);
+      setError('No fue posible guardar el autodiagnóstico.');
+      setGuardando(false);
+    }
+  };
+
+  const cortes = [...((doc && doc.cortes) || [])].sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+
+  return (
+    <Ventana titulo={pol.nombre} subtitulo={'Dimensión ' + pol.dim + ' · ' + DIMENSIONES[pol.dim]}
+      ancho="max-w-2xl" alCerrar={alCerrar}
+      pie={<>
+        {error && <p className="mr-auto self-center text-sm font-medium text-red-700 dark:text-red-400" role="alert">{error}</p>}
+        <button className={CLS_BOTON_SECUNDARIO} onClick={alCerrar}>{ctx.puedeEditar ? 'Cancelar' : 'Cerrar'}</button>
+        {ctx.puedeEditar && (
+          <>
+            <button className={CLS_BOTON_SECUNDARIO} onClick={() => guardar(true)} disabled={guardando}>
+              <IcoReloj /> Guardar corte
+            </button>
+            <button className={CLS_BOTON_PRIMARIO} onClick={() => guardar(false)} disabled={guardando}>
+              {guardando ? 'Guardando…' : 'Guardar'}
+            </button>
+          </>
+        )}
+      </>}>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Puntaje de la política</span>
+          <ChipPuntaje p={puntaje} grande />
+        </div>
+
+        <ol className="space-y-3">
+          {pol.criterios.map((c, i) => (
+            <li key={i} className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+              <p className="text-sm text-slate-700 dark:text-slate-200">
+                <span className="mr-1.5 font-bold text-slate-400">{i + 1}.</span>{c}
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <select aria-label={'Calificación del criterio ' + (i + 1)}
+                  className={CLS_INPUT + ' w-44'} disabled={!ctx.puedeEditar}
+                  value={valores[i] != null ? valores[i] : ''}
+                  onChange={e => ponValor(i, e.target.value)}>
+                  <option value="">Sin calificar</option>
+                  {ESCALA_AUTODIAG.map(x => <option key={x.valor} value={x.valor}>{x.valor} · {x.etiqueta}</option>)}
+                </select>
+                <input aria-label={'Observación del criterio ' + (i + 1)}
+                  className={CLS_INPUT + ' min-w-[160px] flex-1'} disabled={!ctx.puedeEditar}
+                  placeholder="Observación (opcional)" value={obs[i] || ''}
+                  onChange={e => setObs(prev => ({ ...prev, [i]: e.target.value }))} />
+              </div>
+            </li>
+          ))}
+        </ol>
+
+        {cortes.length > 0 && (
+          <div>
+            <h4 className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Cortes registrados</h4>
+            <ul className="space-y-1 text-sm text-slate-600 dark:text-slate-300">
+              {cortes.map((c, i) => (
+                <li key={i} className="flex items-center gap-2">
+                  <ChipPuntaje p={c.puntaje} />
+                  <span>{formatearFecha(c.fecha)}</span>
+                  <span className="text-xs text-slate-400">· {c.usuario}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </Ventana>
+  );
+};
+
+/* ===== 3.15 Pestaña PAAC (Plan Anticorrupción y de Atención al Ciudadano) ===== */
+
+const PaacTab = ({ ctx }) => {
+  const d = ctx.datosMipg;
+  const [anio, setAnio] = useState(new Date().getFullYear());
+  if (d === null) {
+    return <p className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400 dark:border-slate-700 dark:bg-slate-900" role="status">Cargando el PAAC…</p>;
+  }
+  const anios = [...new Set([new Date().getFullYear(), ...d.paac.map(x => +x.anio)])].sort((a, b) => b - a);
+  const items = d.paac.filter(x => +x.anio === +anio)
+    .map(x => ({ ...x, avance: avancePaac(x), vencida: actividadVencida(x.fechaFin, avancePaac(x)) }));
+  const promedio = items.length ? Math.round(items.reduce((s, x) => s + x.avance, 0) / items.length) : null;
+  const vencidas = items.filter(x => x.vencida).length;
+
+  const riesgosCorrupcion = ctx.riesgosCalc.filter(r => r.tipo === 'Corrupción' && r.estado !== 'Cerrado');
+
+  const eliminar = (x) => ctx.abrirModal({
+    tipo: 'confirmar',
+    props: {
+      titulo: 'Eliminar actividad del PAAC',
+      mensaje: 'Se eliminará la actividad "' + x.actividad + '" con sus cortes de seguimiento.',
+      textoConfirmar: 'Eliminar',
+      alConfirmar: async () => {
+        try {
+          await DB.eliminarDe('paac', x.id);
+          ctx.registrar('Eliminó actividad PAAC', 'PAAC', String(x.actividad).slice(0, 90));
+          ctx.avisar('Actividad eliminada');
+          await ctx.recargarMipg();
+        } catch (e) { console.error(e); ctx.avisar('No fue posible eliminar', 'error'); }
+      }
+    }
+  });
+
+  const exportar = () => {
+    const filas = [['Componente', 'Subcomponente', 'Actividad', 'Meta o producto', 'Responsable',
+      'Fecha fin', 'Avance %', 'C1', 'C2', 'C3', 'Última observación']];
+    items.forEach(x => {
+      const porCorte = (c) => { const s = (x.cortes || []).filter(y => y.corte === c).pop(); return s ? s.avance : ''; };
+      const ult = (x.cortes || [])[x.cortes ? x.cortes.length - 1 : 0];
+      filas.push([x.componente + '. ' + PAAC_COMPONENTES[x.componente], x.subcomponente || '', x.actividad,
+        x.meta || '', x.responsable || '', formatearFecha(x.fechaFin), x.avance,
+        porCorte('C1'), porCorte('C2'), porCorte('C3'), ult ? ult.observacion : '']);
+    });
+    exportarLibro('paac_' + anio + '_' + (ctx.entidad.sigla || 'ENT').toLowerCase(),
+      [{ nombre: 'PAAC ' + anio, filas, anchos: [30, 26, 46, 24, 20, 11, 9, 6, 6, 6, 40] }], ctx.avisar);
+  };
+
+  const claseIcono = 'rounded p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-tinta dark:text-slate-400 dark:hover:bg-slate-800';
+
+  return (
+    <div className="animar-subir space-y-5">
+      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <TituloSeccion>PAAC {anio}</TituloSeccion>
+            <select aria-label="Vigencia del PAAC" className={CLS_INPUT + ' w-auto'} value={anio}
+              onChange={e => setAnio(+e.target.value)}>
+              {anios.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button className={CLS_BOTON_SECUNDARIO} onClick={exportar}><IcoDescarga /> Exportar</button>
+            {ctx.puedeEditar && (
+              <button className={CLS_BOTON_PRIMARIO}
+                onClick={() => ctx.abrirModal({ tipo: 'paac-actividad', props: { anio } })}>
+                <IcoMas /> Nueva actividad
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-slate-100 pt-3 text-sm dark:border-slate-800">
+          <span className="text-slate-600 dark:text-slate-300">{items.length} actividades</span>
+          <span className="flex items-center gap-2 text-slate-600 dark:text-slate-300">Avance promedio <ChipPuntaje p={promedio} /></span>
+          <span className={vencidas ? 'font-semibold text-red-700 dark:text-red-400' : 'text-slate-600 dark:text-slate-300'}>
+            {vencidas} vencida(s)
+          </span>
+          <span className="ml-auto flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+            Componente 1: {riesgosCorrupcion.length} riesgo(s) de corrupción en la matriz
+            <button className="font-semibold text-tinta underline-offset-2 hover:underline dark:text-tinta-claro"
+              onClick={() => ctx.irA('riesgos')}>Ver riesgos</button>
+          </span>
+        </div>
+      </section>
+
+      {items.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-400" role="status">
+          Sin actividades registradas para {anio}.
+          {ctx.puedeEditar && ' Usa "Nueva actividad" para armar el plan por componentes.'}
+        </div>
+      ) : (
+        [1, 2, 3, 4, 5, 6].map(comp => {
+          const delComp = items.filter(x => +x.componente === comp);
+          if (!delComp.length) return null;
+          const prom = Math.round(delComp.reduce((s, x) => s + x.avance, 0) / delComp.length);
+          return (
+            <section key={comp} className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">
+                  Componente {comp} · {PAAC_COMPONENTES[comp]}
+                </h3>
+                <ChipPuntaje p={prom} />
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[860px] text-sm">
+                  <thead className="text-left text-[11px] uppercase tracking-wide text-slate-400">
+                    <tr>
+                      <th className="py-2 pr-3">Subcomponente</th><th className="py-2 pr-3">Actividad</th>
+                      <th className="py-2 pr-3">Responsable</th><th className="py-2 pr-3">Fecha fin</th>
+                      <th className="py-2 pr-3">Avance</th><th className="py-2 pr-3">Cortes</th>
+                      <th className="py-2 text-right">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {delComp.map(x => (
+                      <tr key={x.id} className="align-top">
+                        <td className="max-w-[180px] py-2 pr-3 text-xs text-slate-500">{x.subcomponente || '—'}</td>
+                        <td className="min-w-[240px] py-2 pr-3">
+                          <p className="text-slate-700 dark:text-slate-200">{x.actividad}</p>
+                          {x.meta && <p className="text-[11px] text-slate-400">Meta: {x.meta}</p>}
+                        </td>
+                        <td className="py-2 pr-3 text-xs text-slate-500">{x.responsable || '—'}</td>
+                        <td className={'whitespace-nowrap py-2 pr-3 text-xs ' + (x.vencida ? 'font-semibold text-red-700 dark:text-red-400' : 'text-slate-500')}>
+                          {formatearFecha(x.fechaFin)}{x.vencida && <span className="ml-1.5"><Etiqueta texto="Vencida" /></span>}
+                        </td>
+                        <td className="py-2 pr-3"><ChipPuntaje p={x.avance} /></td>
+                        <td className="py-2 pr-3 text-xs text-slate-500">
+                          {(x.cortes || []).map(c => c.corte).join(', ') || '—'}
+                        </td>
+                        <td className="py-2">
+                          <div className="flex justify-end gap-0.5">
+                            {ctx.puedeEditar && (
+                              <>
+                                <button className={claseIcono} aria-label="Registrar corte de seguimiento"
+                                  onClick={() => ctx.abrirModal({ tipo: 'paac-corte', props: { actividadId: x.id } })}><IcoReloj /></button>
+                                <button className={claseIcono} aria-label="Editar actividad"
+                                  onClick={() => ctx.abrirModal({ tipo: 'paac-actividad', props: { actividadId: x.id, anio } })}><IcoLapiz /></button>
+                              </>
+                            )}
+                            {ctx.esAdmin && (
+                              <button className={claseIcono + ' hover:text-red-700'} aria-label="Eliminar actividad"
+                                onClick={() => eliminar(x)}><IcoBasura /></button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          );
+        })
+      )}
+    </div>
+  );
+};
+
+/* --- Crear / editar actividad del PAAC --- */
+const ModalActividadPaac = ({ props, alCerrar, ctx }) => {
+  const original = props.actividadId
+    ? (ctx.datosMipg ? ctx.datosMipg.paac.find(x => x.id === props.actividadId) : null) : null;
+  const [b, setB] = useState(() => original ? clonar(original) : {
+    anio: props.anio || new Date().getFullYear(), componente: 1, subcomponente: '',
+    actividad: '', meta: '', responsable: '', fechaFin: ''
+  });
+  const [error, setError] = useState('');
+  const [guardando, setGuardando] = useState(false);
+  const pon = (k) => (e) => setB(prev => ({ ...prev, [k]: e.target.value }));
+
+  const guardar = async () => {
+    if (!String(b.actividad || '').trim()) { setError('Describe la actividad.'); return; }
+    setGuardando(true); setError('');
+    try {
+      const datos = {
+        entidadId: ctx.entidad.id, anio: +b.anio, componente: +b.componente,
+        subcomponente: (b.subcomponente || '').trim(), actividad: String(b.actividad).trim(),
+        meta: (b.meta || '').trim(), responsable: (b.responsable || '').trim(), fechaFin: b.fechaFin || ''
+      };
+      if (original) {
+        await DB.actualizarDe('paac', original.id, datos);
+        ctx.registrar('Actualizó actividad PAAC', 'PAAC', datos.actividad.slice(0, 90));
+        ctx.avisar('Actividad actualizada');
+      } else {
+        await DB.crearDe('paac', { ...datos, cortes: [], creadoEn: new Date().toISOString() });
+        ctx.registrar('Creó actividad PAAC', 'PAAC', datos.actividad.slice(0, 90));
+        ctx.avisar('Actividad creada');
+      }
+      await ctx.recargarMipg();
+      alCerrar();
+    } catch (e) {
+      console.error(e);
+      setError('No fue posible guardar la actividad.');
+      setGuardando(false);
+    }
+  };
+
+  return (
+    <Ventana titulo={original ? 'Editar actividad del PAAC' : 'Nueva actividad del PAAC'}
+      subtitulo={'Vigencia ' + b.anio} ancho="max-w-lg" alCerrar={alCerrar}
+      pie={<>
+        {error && <p className="mr-auto self-center text-sm font-medium text-red-700 dark:text-red-400" role="alert">{error}</p>}
+        <button className={CLS_BOTON_SECUNDARIO} onClick={alCerrar}>Cancelar</button>
+        <button className={CLS_BOTON_PRIMARIO} onClick={guardar} disabled={guardando}>{guardando ? 'Guardando…' : 'Guardar actividad'}</button>
+      </>}>
+      <div className="space-y-4">
+        <div>
+          <label htmlFor="pa-comp" className={CLS_ETIQUETA}>Componente</label>
+          <select id="pa-comp" className={CLS_INPUT} value={b.componente} onChange={pon('componente')}>
+            {Object.keys(PAAC_COMPONENTES).map(k => <option key={k} value={k}>{k}. {PAAC_COMPONENTES[k]}</option>)}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="pa-sub" className={CLS_ETIQUETA}>Subcomponente</label>
+          <input id="pa-sub" className={CLS_INPUT} value={b.subcomponente} onChange={pon('subcomponente')}
+            placeholder="Ej.: Estrategia de racionalización" />
+        </div>
+        <div>
+          <label htmlFor="pa-act" className={CLS_ETIQUETA}>Actividad</label>
+          <textarea id="pa-act" rows="2" className={CLS_INPUT} value={b.actividad} autoFocus onChange={pon('actividad')} />
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label htmlFor="pa-meta" className={CLS_ETIQUETA}>Meta o producto</label>
+            <input id="pa-meta" className={CLS_INPUT} value={b.meta} onChange={pon('meta')} />
+          </div>
+          <div>
+            <label htmlFor="pa-resp" className={CLS_ETIQUETA}>Responsable</label>
+            <input id="pa-resp" className={CLS_INPUT} value={b.responsable} onChange={pon('responsable')} />
+          </div>
+        </div>
+        <div className="sm:w-1/2">
+          <label htmlFor="pa-fecha" className={CLS_ETIQUETA}>Fecha fin</label>
+          <input id="pa-fecha" type="date" className={CLS_INPUT} value={b.fechaFin} onChange={pon('fechaFin')} />
+        </div>
+      </div>
+    </Ventana>
+  );
+};
+
+/* --- Registro del corte cuatrimestral de una actividad del PAAC --- */
+const ModalCortePaac = ({ props, alCerrar, ctx }) => {
+  const item = ctx.datosMipg ? ctx.datosMipg.paac.find(x => x.id === props.actividadId) : null;
+  const yaRegistrados = (item && item.cortes ? item.cortes.map(c => c.corte) : []);
+  const siguiente = CORTES_PAAC.find(c => !yaRegistrados.includes(c.id));
+  const [corte, setCorte] = useState(siguiente ? siguiente.id : 'C3');
+  const [avance, setAvance] = useState(item ? avancePaac(item) : 0);
+  const [observacion, setObservacion] = useState('');
+  const [error, setError] = useState('');
+  const [guardando, setGuardando] = useState(false);
+
+  if (!item) {
+    return (
+      <Ventana titulo="Actividad no disponible" ancho="max-w-md" alCerrar={alCerrar}
+        pie={<button className={CLS_BOTON_PRIMARIO} onClick={alCerrar}>Cerrar</button>}>
+        <p className="text-sm text-slate-600 dark:text-slate-300">La actividad ya no existe.</p>
+      </Ventana>
+    );
+  }
+
+  const guardar = async () => {
+    const pct = Math.max(0, Math.min(100, +avance || 0));
+    if (!String(observacion || '').trim()) { setError('Escribe la observación del corte.'); return; }
+    setGuardando(true); setError('');
+    try {
+      const nuevo = { corte, avance: pct, observacion: String(observacion).trim(),
+        fecha: hoyISO(), usuario: ctx.usuario.usuario };
+      const cortes = clonar(item.cortes || []).filter(c => c.corte !== corte); // re-registrar reemplaza
+      cortes.push(nuevo);
+      cortes.sort((a, b) => (ORDEN_CORTE[a.corte] || 0) - (ORDEN_CORTE[b.corte] || 0));
+      await DB.actualizarDe('paac', item.id, { cortes });
+      ctx.registrar('Registró corte PAAC', 'PAAC', corte + ' · ' + pct + '% · ' + String(item.actividad).slice(0, 60));
+      ctx.avisar('Corte ' + corte + ' registrado (' + pct + '%)');
+      await ctx.recargarMipg();
+      alCerrar();
+    } catch (e) {
+      console.error(e);
+      setError('No fue posible guardar el corte.');
+      setGuardando(false);
+    }
+  };
+
+  return (
+    <Ventana titulo="Registrar corte de seguimiento" subtitulo={String(item.actividad).slice(0, 80)}
+      ancho="max-w-md" alCerrar={alCerrar}
+      pie={<>
+        {error && <p className="mr-auto self-center text-sm font-medium text-red-700 dark:text-red-400" role="alert">{error}</p>}
+        <button className={CLS_BOTON_SECUNDARIO} onClick={alCerrar}>Cancelar</button>
+        <button className={CLS_BOTON_PRIMARIO} onClick={guardar} disabled={guardando}>{guardando ? 'Guardando…' : 'Guardar corte'}</button>
+      </>}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="pc-corte" className={CLS_ETIQUETA}>Corte</label>
+            <select id="pc-corte" className={CLS_INPUT} value={corte} onChange={e => setCorte(e.target.value)}>
+              {CORTES_PAAC.map(c => (
+                <option key={c.id} value={c.id}>{c.etiqueta}{yaRegistrados.includes(c.id) ? ' · registrado' : ''}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="pc-avance" className={CLS_ETIQUETA}>Avance (%)</label>
+            <input id="pc-avance" type="number" min="0" max="100" step="5" className={CLS_INPUT}
+              value={avance} onChange={e => setAvance(e.target.value)} />
+          </div>
+        </div>
+        <div>
+          <label htmlFor="pc-obs" className={CLS_ETIQUETA}>Observación</label>
+          <textarea id="pc-obs" rows="3" className={CLS_INPUT} value={observacion} autoFocus
+            onChange={e => setObservacion(e.target.value)}
+            placeholder="Qué se ejecutó, evidencias y pendientes…" />
+        </div>
+        {yaRegistrados.includes(corte) && (
+          <p className="text-xs text-amber-700 dark:text-amber-400">Este corte ya tiene registro: al guardar se reemplaza.</p>
+        )}
+      </div>
+    </Ventana>
+  );
+};
+
+/* ===== 3.16 Pestaña Planes del Decreto 612 ===== */
+
+const PlanesTab = ({ ctx }) => {
+  const d = ctx.datosMipg;
+  const [anio, setAnio] = useState(new Date().getFullYear());
+  if (d === null) {
+    return <p className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400 dark:border-slate-700 dark:bg-slate-900" role="status">Cargando los planes…</p>;
+  }
+  const anios = [...new Set([new Date().getFullYear(), ...d.planes.map(x => +x.anio), ...d.paac.map(x => +x.anio)])].sort((a, b) => b - a);
+  const items = d.planes.filter(x => +x.anio === +anio);
+  const paacAnio = d.paac.filter(x => +x.anio === +anio);
+
+  const resumenPlan = (plan) => {
+    if (plan.desdePaac) {
+      const n = paacAnio.length;
+      const prom = n ? Math.round(paacAnio.reduce((s, a) => s + avancePaac(a), 0) / n) : null;
+      const venc = paacAnio.filter(a => actividadVencida(a.fechaFin, avancePaac(a))).length;
+      return { n, prom, venc };
+    }
+    const acts = items.filter(x => +x.planId === plan.id);
+    const n = acts.length;
+    const prom = n ? Math.round(acts.reduce((s, a) => s + (+a.avance || 0), 0) / n) : null;
+    const venc = acts.filter(a => actividadVencida(a.fechaFin, +a.avance || 0)).length;
+    return { n, prom, venc };
+  };
+
+  const totalActs = items.length + paacAnio.length;
+  const conAvance = [...items.map(a => +a.avance || 0), ...paacAnio.map(avancePaac)];
+  const promGlobal = conAvance.length ? Math.round(conAvance.reduce((a, b) => a + b, 0) / conAvance.length) : null;
+  const vencGlobal = items.filter(a => actividadVencida(a.fechaFin, +a.avance || 0)).length +
+    paacAnio.filter(a => actividadVencida(a.fechaFin, avancePaac(a))).length;
+
+  const exportar = () => {
+    const filasResumen = [['N°', 'Plan', 'Actividades', 'Avance %', 'Vencidas']];
+    PLANES_612.forEach(p => {
+      const r = resumenPlan(p);
+      filasResumen.push([p.id, p.nombre + (p.desdePaac ? ' (desde PAAC)' : ''), r.n, r.prom == null ? '' : r.prom, r.venc]);
+    });
+    const filasActs = [['Plan', 'Actividad', 'Responsable', 'Fecha fin', 'Avance %', 'Evidencia']];
+    items.forEach(a => filasActs.push([
+      (PLANES_612.find(p => p.id === +a.planId) || {}).nombre || a.planId,
+      a.actividad, a.responsable || '', formatearFecha(a.fechaFin), +a.avance || 0, a.evidencia || '']));
+    exportarLibro('planes_612_' + anio + '_' + (ctx.entidad.sigla || 'ENT').toLowerCase(),
+      [{ nombre: 'Resumen', filas: filasResumen, anchos: [5, 52, 11, 9, 9] },
+       { nombre: 'Actividades', filas: filasActs, anchos: [40, 46, 20, 11, 9, 24] }], ctx.avisar);
+  };
+
+  return (
+    <div className="animar-subir space-y-5">
+      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <TituloSeccion>Planes institucionales · Decreto 612</TituloSeccion>
+            <select aria-label="Vigencia de los planes" className={CLS_INPUT + ' w-auto'} value={anio}
+              onChange={e => setAnio(+e.target.value)}>
+              {anios.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
+          </div>
+          <button className={CLS_BOTON_SECUNDARIO} onClick={exportar}><IcoDescarga /> Exportar</button>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-slate-100 pt-3 text-sm dark:border-slate-800">
+          <span className="text-slate-600 dark:text-slate-300">{totalActs} actividades en {anio}</span>
+          <span className="flex items-center gap-2 text-slate-600 dark:text-slate-300">Avance promedio <ChipPuntaje p={promGlobal} /></span>
+          <span className={vencGlobal ? 'font-semibold text-red-700 dark:text-red-400' : 'text-slate-600 dark:text-slate-300'}>
+            {vencGlobal} vencida(s)
+          </span>
+        </div>
+      </section>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {PLANES_612.map(p => {
+          const r = resumenPlan(p);
+          return (
+            <button key={p.id}
+              onClick={() => p.desdePaac ? ctx.irA('paac') : ctx.abrirModal({ tipo: 'plan612', props: { planId: p.id, anio } })}
+              className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition-colors hover:border-tinta hover:bg-tinta-tenue dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-tinta font-display text-sm font-bold text-white">{p.id}</span>
+              <span className="min-w-0 flex-1">
+                <span className="linea-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">{p.nombre}</span>
+                <span className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                  <ChipPuntaje p={r.prom} />
+                  <span>{r.n} actividad(es)</span>
+                  {r.venc > 0 && <span className="font-semibold text-red-700 dark:text-red-400">{r.venc} vencida(s)</span>}
+                  {p.desdePaac && <span className="rounded bg-tinta-tenue px-1.5 py-0.5 font-semibold text-tinta dark:bg-slate-700 dark:text-slate-200">desde PAAC</span>}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+/* --- Actividades de un plan del Decreto 612 --- */
+const ModalPlan612 = ({ props, alCerrar, ctx }) => {
+  const plan = PLANES_612.find(p => p.id === +props.planId) || { id: props.planId, nombre: 'Plan' };
+  const acts = ctx.datosMipg ? ctx.datosMipg.planes.filter(x => +x.planId === plan.id && +x.anio === +props.anio) : [];
+  const [edit, setEdit] = useState(null); // null | { id?, actividad, responsable, fechaFin, avance, evidencia }
+  const [error, setError] = useState('');
+  const [guardando, setGuardando] = useState(false);
+  const ponE = (k) => (e) => setEdit(prev => ({ ...prev, [k]: e.target.value }));
+
+  const nuevaFila = () => { setError(''); setEdit({ actividad: '', responsable: '', fechaFin: '', avance: 0, evidencia: '' }); };
+
+  const guardarFila = async () => {
+    if (!String(edit.actividad || '').trim()) { setError('Describe la actividad.'); return; }
+    setGuardando(true); setError('');
+    try {
+      const datos = {
+        entidadId: ctx.entidad.id, anio: +props.anio, planId: plan.id,
+        actividad: String(edit.actividad).trim(), responsable: (edit.responsable || '').trim(),
+        fechaFin: edit.fechaFin || '', avance: Math.max(0, Math.min(100, +edit.avance || 0)),
+        evidencia: (edit.evidencia || '').trim()
+      };
+      if (edit.id) {
+        await DB.actualizarDe('planes', edit.id, datos);
+        ctx.registrar('Actualizó actividad de plan', 'D612-' + plan.id, datos.actividad.slice(0, 80));
+      } else {
+        await DB.crearDe('planes', { ...datos, creadoEn: new Date().toISOString() });
+        ctx.registrar('Creó actividad de plan', 'D612-' + plan.id, datos.actividad.slice(0, 80));
+      }
+      ctx.avisar('Actividad guardada');
+      await ctx.recargarMipg();
+      setEdit(null);
+    } catch (e) {
+      console.error(e);
+      setError('No fue posible guardar la actividad.');
+    } finally { setGuardando(false); }
+  };
+
+  const eliminarFila = (a) => ctx.abrirModal({
+    tipo: 'confirmar',
+    props: {
+      titulo: 'Eliminar actividad',
+      mensaje: 'Se eliminará la actividad "' + a.actividad + '" del plan.',
+      textoConfirmar: 'Eliminar',
+      alConfirmar: async () => {
+        try {
+          await DB.eliminarDe('planes', a.id);
+          ctx.registrar('Eliminó actividad de plan', 'D612-' + plan.id, String(a.actividad).slice(0, 80));
+          ctx.avisar('Actividad eliminada');
+          await ctx.recargarMipg();
+        } catch (e) { console.error(e); ctx.avisar('No fue posible eliminar', 'error'); }
+      }
+    }
+  });
+
+  const claseIcono = 'rounded p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-tinta dark:text-slate-400 dark:hover:bg-slate-800';
+
+  return (
+    <Ventana titulo={plan.id + '. ' + plan.nombre} subtitulo={'Vigencia ' + props.anio}
+      ancho="max-w-3xl" alCerrar={alCerrar}
+      pie={<button className={CLS_BOTON_PRIMARIO} onClick={alCerrar}>Cerrar</button>}>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm text-slate-500 dark:text-slate-400">{acts.length} actividad(es) registradas</p>
+          {ctx.puedeEditar && !edit && (
+            <button className={CLS_BOTON_SECUNDARIO} onClick={nuevaFila}><IcoMas /> Agregar actividad</button>
+          )}
+        </div>
+
+        {acts.length === 0 && !edit ? (
+          <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500 dark:border-slate-600 dark:text-slate-400">
+            Este plan aún no tiene actividades para {props.anio}.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead className="text-left text-[11px] uppercase tracking-wide text-slate-400">
+                <tr>
+                  <th className="py-2 pr-3">Actividad</th><th className="py-2 pr-3">Responsable</th>
+                  <th className="py-2 pr-3">Fecha fin</th><th className="py-2 pr-3">Avance</th>
+                  <th className="py-2 pr-3">Evidencia</th><th className="py-2 text-right">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {acts.map(a => {
+                  const venc = actividadVencida(a.fechaFin, +a.avance || 0);
+                  return (
+                    <tr key={a.id} className="align-top">
+                      <td className="min-w-[220px] py-2 pr-3 text-slate-700 dark:text-slate-200">{a.actividad}</td>
+                      <td className="py-2 pr-3 text-xs text-slate-500">{a.responsable || '—'}</td>
+                      <td className={'whitespace-nowrap py-2 pr-3 text-xs ' + (venc ? 'font-semibold text-red-700 dark:text-red-400' : 'text-slate-500')}>
+                        {formatearFecha(a.fechaFin)}{venc && <span className="ml-1.5"><Etiqueta texto="Vencida" /></span>}
+                      </td>
+                      <td className="py-2 pr-3"><ChipPuntaje p={+a.avance || 0} /></td>
+                      <td className="max-w-[140px] py-2 pr-3 text-xs text-slate-500">{a.evidencia || '—'}</td>
+                      <td className="py-2">
+                        <div className="flex justify-end gap-0.5">
+                          {ctx.puedeEditar && (
+                            <button className={claseIcono} aria-label="Editar actividad"
+                              onClick={() => { setError(''); setEdit({ id: a.id, actividad: a.actividad, responsable: a.responsable || '', fechaFin: a.fechaFin || '', avance: +a.avance || 0, evidencia: a.evidencia || '' }); }}>
+                              <IcoLapiz /></button>
+                          )}
+                          {ctx.esAdmin && (
+                            <button className={claseIcono + ' hover:text-red-700'} aria-label="Eliminar actividad"
+                              onClick={() => eliminarFila(a)}><IcoBasura /></button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {edit && (
+          <div className="space-y-3 rounded-lg border border-tinta bg-tinta-tenue/50 p-3 dark:border-tinta-claro dark:bg-slate-800/60">
+            <p className="text-xs font-bold uppercase tracking-wide text-tinta dark:text-slate-200">
+              {edit.id ? 'Editar actividad' : 'Nueva actividad'}
+            </p>
+            <textarea aria-label="Descripción de la actividad" rows="2" className={CLS_INPUT}
+              placeholder="Actividad…" value={edit.actividad} autoFocus onChange={ponE('actividad')} />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+              <input aria-label="Responsable" className={CLS_INPUT} placeholder="Responsable"
+                value={edit.responsable} onChange={ponE('responsable')} />
+              <input aria-label="Fecha fin" type="date" className={CLS_INPUT}
+                value={edit.fechaFin} onChange={ponE('fechaFin')} />
+              <input aria-label="Avance en porcentaje" type="number" min="0" max="100" step="5" className={CLS_INPUT}
+                placeholder="Avance %" value={edit.avance} onChange={ponE('avance')} />
+              <input aria-label="Evidencia" className={CLS_INPUT} placeholder="Evidencia"
+                value={edit.evidencia} onChange={ponE('evidencia')} />
+            </div>
+            <div className="flex justify-end gap-2">
+              {error && <p className="mr-auto self-center text-sm font-medium text-red-700 dark:text-red-400" role="alert">{error}</p>}
+              <button className={CLS_BOTON_SECUNDARIO} onClick={() => { setEdit(null); setError(''); }}>Cancelar</button>
+              <button className={CLS_BOTON_PRIMARIO} onClick={guardarFila} disabled={guardando}>
+                {guardando ? 'Guardando…' : 'Guardar actividad'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </Ventana>
+  );
+};
+
+/* ===== 3.17 Pestaña FURAG (resultados por vigencia) ===== */
+
+const DeltaPuntaje = ({ actual, anterior }) => {
+  if (actual == null || anterior == null) return null;
+  const dif = Math.round(actual - anterior);
+  if (!dif) return <span className="ml-1 text-[10px] text-slate-400">=</span>;
+  return (
+    <span className={'ml-1 text-[10px] font-bold ' + (dif > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400')}>
+      {dif > 0 ? '▲' : '▼'}{Math.abs(dif)}
+    </span>
+  );
+};
+
+const FuragTab = ({ ctx }) => {
+  const d = ctx.datosMipg;
+  if (d === null) {
+    return <p className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400 dark:border-slate-700 dark:bg-slate-900" role="status">Cargando el FURAG…</p>;
+  }
+  const vigencias = [...d.furag].sort((a, b) => (+a.vigencia) - (+b.vigencia)); // ascendente para leer la evolución
+
+  const autodiagDe = (polId) => {
+    const pol = politicaPorId(polId);
+    return puntajeAutodiag(d.autodiagnosticos.find(x => x.politicaId === polId), pol);
+  };
+  const puntajesAutod = POLITICAS.map(p => autodiagDe(p.id)).filter(x => x != null);
+  const autodProm = puntajesAutod.length
+    ? Math.round(puntajesAutod.reduce((a, b) => a + b, 0) / puntajesAutod.length) : null;
+
+  const filas = [
+    { clave: '_indice', nombre: 'Índice de desempeño institucional', esIndice: true },
+    ...POLITICAS.map(p => ({ clave: p.id, nombre: p.nombre, dim: p.dim }))
+  ];
+  const valorDe = (doc, fila) => {
+    if (!doc) return null;
+    const v = fila.esIndice ? doc.indice : (doc.valores || {})[fila.clave];
+    return v == null || v === '' ? null : Math.round(+v);
+  };
+
+  const exportar = () => {
+    const cab = ['Política', ...vigencias.map(v => 'FURAG ' + v.vigencia), 'Autodiagnóstico actual'];
+    const filasX = [cab];
+    filas.forEach(f => filasX.push([
+      f.esIndice ? f.nombre : 'D' + f.dim + ' · ' + f.nombre,
+      ...vigencias.map(v => { const x = valorDe(v, f); return x == null ? '' : x; }),
+      f.esIndice ? (autodProm == null ? '' : autodProm) : (autodiagDe(f.clave) == null ? '' : autodiagDe(f.clave))
+    ]));
+    exportarLibro('furag_' + (ctx.entidad.sigla || 'ENT').toLowerCase() + '_' + hoyISO(),
+      [{ nombre: 'FURAG', filas: filasX, anchos: [46, ...vigencias.map(() => 12), 16] }], ctx.avisar);
+  };
+
+  return (
+    <div className="animar-subir space-y-5">
+      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <TituloSeccion>Resultados FURAG por vigencia</TituloSeccion>
+          <div className="flex flex-wrap gap-2">
+            <button className={CLS_BOTON_SECUNDARIO} onClick={exportar} disabled={!vigencias.length}>
+              <IcoDescarga /> Exportar
+            </button>
+            {ctx.puedeEditar && (
+              <button className={CLS_BOTON_PRIMARIO} onClick={() => ctx.abrirModal({ tipo: 'furag', props: {} })}>
+                <IcoMas /> Registrar vigencia
+              </button>
+            )}
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-slate-400">
+          Registra los puntajes oficiales que publica Función Pública y compáralos entre vigencias y con el autodiagnóstico interno.
+        </p>
+      </section>
+
+      {vigencias.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-400" role="status">
+          Aún no hay vigencias registradas.
+          {ctx.puedeEditar && ' Usa "Registrar vigencia" para capturar los resultados oficiales.'}
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+          <table className="w-full min-w-[720px] text-sm">
+            <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+              <tr>
+                <th className="col-fija z-10 bg-slate-50 px-3 py-2.5 dark:bg-slate-800">Política</th>
+                {vigencias.map(v => (
+                  <th key={v.id} className="whitespace-nowrap px-3 py-2.5 text-center">
+                    <span className="inline-flex items-center gap-1">
+                      {v.vigencia}
+                      {ctx.puedeEditar && (
+                        <button aria-label={'Editar la vigencia ' + v.vigencia}
+                          className="rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-tinta dark:hover:bg-slate-700"
+                          onClick={() => ctx.abrirModal({ tipo: 'furag', props: { vigencia: v.vigencia } })}>
+                          <IcoLapiz className="h-3 w-3" />
+                        </button>
+                      )}
+                    </span>
+                  </th>
+                ))}
+                <th className="px-3 py-2.5 text-center">Autodiag.</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {filas.map(f => (
+                <tr key={f.clave} className={f.esIndice ? 'bg-tinta-tenue/50 dark:bg-slate-800/60' : ''}>
+                  <td className={'col-fija px-3 py-2 dark:bg-slate-900 ' +
+                      (f.esIndice ? 'bg-tinta-tenue/50 font-bold text-tinta dark:bg-slate-800 dark:text-slate-100' : 'bg-white text-slate-600 dark:text-slate-300')}>
+                    {f.esIndice ? f.nombre : (
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-bold text-slate-400">D{f.dim}</span>
+                        <span className="linea-2">{f.nombre}</span>
+                      </span>
+                    )}
+                  </td>
+                  {vigencias.map((v, i) => {
+                    const actual = valorDe(v, f);
+                    const anterior = i > 0 ? valorDe(vigencias[i - 1], f) : null;
+                    return (
+                      <td key={v.id} className="whitespace-nowrap px-3 py-2 text-center">
+                        <ChipPuntaje p={actual} />
+                        <DeltaPuntaje actual={actual} anterior={anterior} />
+                      </td>
+                    );
+                  })}
+                  <td className="px-3 py-2 text-center">
+                    <ChipPuntaje p={f.esIndice ? autodProm : autodiagDe(f.clave)} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* --- Registro / edición de una vigencia FURAG --- */
+const ModalFurag = ({ props, alCerrar, ctx }) => {
+  const existentes = (ctx.datosMipg && ctx.datosMipg.furag) || [];
+  const original = props.vigencia != null
+    ? existentes.find(x => +x.vigencia === +props.vigencia) : null;
+  const [vig, setVig] = useState(original ? original.vigencia : new Date().getFullYear() - 1);
+  const [indice, setIndice] = useState(original && original.indice != null ? String(original.indice) : '');
+  const [vals, setVals] = useState(() => {
+    const base = {};
+    if (original && original.valores) Object.keys(original.valores).forEach(k => { base[k] = String(original.valores[k]); });
+    return base;
+  });
+  const [error, setError] = useState('');
+  const [guardando, setGuardando] = useState(false);
+
+  const ponVal = (id, v) => setVals(prev => {
+    const n = { ...prev };
+    if (v === '') delete n[id]; else n[id] = v;
+    return n;
+  });
+
+  const guardar = async () => {
+    const vigNum = parseInt(vig, 10);
+    if (!vigNum || vigNum < 2015 || vigNum > 2100) { setError('Escribe una vigencia válida.'); return; }
+    const clamp = (x) => Math.max(0, Math.min(100, Math.round(+x)));
+    const valores = {};
+    Object.keys(vals).forEach(k => { if (vals[k] !== '' && !isNaN(+vals[k])) valores[k] = clamp(vals[k]); });
+    const indiceNum = indice === '' || isNaN(+indice) ? null : clamp(indice);
+    if (indiceNum == null && !Object.keys(valores).length) {
+      setError('Registra al menos el índice o el puntaje de una política.'); return;
+    }
+    setGuardando(true); setError('');
+    try {
+      const objetivo = original || existentes.find(x => +x.vigencia === vigNum) || null;
+      const ahora = new Date().toISOString();
+      const datos = { entidadId: ctx.entidad.id, vigencia: vigNum, valores, indice: indiceNum,
+        actualizadoEn: ahora, actualizadoPor: ctx.usuario.usuario };
+      if (objetivo) await DB.actualizarDe('furag', objetivo.id, datos);
+      else await DB.crearDe('furag', { ...datos, creadoEn: ahora });
+      ctx.registrar('Registró FURAG', 'FURAG',
+        'Vigencia ' + vigNum + (indiceNum != null ? ' · índice ' + indiceNum : ''));
+      ctx.avisar('FURAG ' + vigNum + ' guardado');
+      await ctx.recargarMipg();
+      alCerrar();
+    } catch (e) {
+      console.error(e);
+      setError('No fue posible guardar la vigencia.');
+      setGuardando(false);
+    }
+  };
+
+  return (
+    <Ventana titulo={original ? 'Editar FURAG ' + original.vigencia : 'Registrar vigencia FURAG'}
+      subtitulo="Puntajes oficiales de 0 a 100 por política" ancho="max-w-xl" alCerrar={alCerrar}
+      pie={<>
+        {error && <p className="mr-auto self-center text-sm font-medium text-red-700 dark:text-red-400" role="alert">{error}</p>}
+        <button className={CLS_BOTON_SECUNDARIO} onClick={alCerrar}>Cancelar</button>
+        <button className={CLS_BOTON_PRIMARIO} onClick={guardar} disabled={guardando}>
+          {guardando ? 'Guardando…' : 'Guardar vigencia'}
+        </button>
+      </>}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="f-vig" className={CLS_ETIQUETA}>Vigencia</label>
+            <input id="f-vig" type="number" min="2015" max="2100" className={CLS_INPUT}
+              value={vig} disabled={!!original} onChange={e => setVig(e.target.value)} />
+          </div>
+          <div>
+            <label htmlFor="f-ind" className={CLS_ETIQUETA}>Índice de desempeño</label>
+            <input id="f-ind" type="number" min="0" max="100" className={CLS_INPUT}
+              value={indice} onChange={e => setIndice(e.target.value)} placeholder="0-100" />
+          </div>
+        </div>
+        <ul className="space-y-1.5">
+          {POLITICAS.map(p => (
+            <li key={p.id} className="flex items-center gap-2">
+              <span className="w-8 shrink-0 text-[10px] font-bold text-slate-400">D{p.dim}</span>
+              <span className="min-w-0 flex-1 truncate text-sm text-slate-600 dark:text-slate-300" title={p.nombre}>{p.nombre}</span>
+              <input aria-label={'Puntaje FURAG de ' + p.nombre} type="number" min="0" max="100"
+                className={CLS_INPUT + ' w-24 text-center'} placeholder="—"
+                value={vals[p.id] != null ? vals[p.id] : ''} onChange={e => ponVal(p.id, e.target.value)} />
+            </li>
+          ))}
+        </ul>
+      </div>
+    </Ventana>
+  );
+};
+
+/* ===== 3.18 Montaje ===== */
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 </script>
 </body>
