@@ -64,6 +64,7 @@
      ============================================================================ -->
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#16324F" />
 <meta name="description" content="Matriz de riesgos MIPG viva: registro, valoración DAFP, mapa de calor, planes de acción y seguimiento periódico para entidades públicas." />
 <title>Matriz de Riesgos MIPG</title>
 
@@ -113,24 +114,53 @@
   body { font-family: 'Public Sans', system-ui, 'Segoe UI', sans-serif; }
   .font-display { font-family: 'Bitter', Georgia, serif; }
 
+  /* Fondo de página: papel con un resplandor institucional muy sutil arriba */
+  body {
+    background-color: #F4F6F8;
+    background-image: radial-gradient(1100px 420px at 50% -140px, rgba(22,50,79,.07), transparent 70%);
+    background-repeat: no-repeat;
+  }
+  .dark body {
+    background-color: #020617;
+    background-image: radial-gradient(1100px 420px at 50% -140px, rgba(127,179,200,.06), transparent 70%);
+  }
+  ::selection { background: #1F4E7A; color: #fff; }
+
   /* Animaciones de entrada (estilo de la casa) */
   @keyframes aparecer { from { opacity: 0; } to { opacity: 1; } }
   @keyframes subir { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  @keyframes entrarDerecha { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
+  @keyframes crecerBarra { from { transform: scaleX(0); } to { transform: scaleX(1); } }
   .animar-aparecer { animation: aparecer .18s ease-out; }
   .animar-subir { animation: subir .22s ease-out; }
+  .animar-derecha { animation: entrarDerecha .25s ease-out; }
+  .barra-crecer { transform-origin: left; animation: crecerBarra .6s cubic-bezier(.22, 1, .36, 1); }
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; }
   }
 
+  /* Tarjetas: profundidad suave y elevación leve al pasar el mouse */
+  .tarjeta { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 1px 3px rgba(15,23,42,.05); transition: box-shadow .18s ease; }
+  .tarjeta:hover { box-shadow: 0 6px 18px rgba(15,23,42,.09); }
+  .dark .tarjeta { box-shadow: 0 1px 3px rgba(0,0,0,.45); }
+  .dark .tarjeta:hover { box-shadow: 0 6px 20px rgba(0,0,0,.55); }
+
+  /* Cifras alineadas en tarjetas KPI y tablas */
+  .num-tab { font-variant-numeric: tabular-nums; }
+
   /* Barra de desplazamiento discreta */
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 8px; }
+  ::-webkit-scrollbar-thumb { background: #B6C2D0; border-radius: 8px; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
   .dark ::-webkit-scrollbar-thumb { background: #475569; }
 
   /* Mapa de calor */
   .celda-mapa { transition: transform .12s ease, box-shadow .12s ease; }
   .celda-mapa:hover, .celda-mapa:focus-visible { transform: scale(1.06); z-index: 5; box-shadow: 0 4px 14px rgba(0,0,0,.28); }
+
+  /* La dona del panel se reacomoda con suavidad cuando cambian los datos */
+  .dona-segmento { transition: stroke-dasharray .5s ease, stroke-dashoffset .5s ease; }
 
   /* Accesibilidad: foco visible siempre */
   :focus-visible { outline: 2px solid #16324F; outline-offset: 2px; }
@@ -887,6 +917,15 @@ const IcoSol = (p) => <Icono {...p} d={<><circle cx="12" cy="12" r="4"/><path d=
 const IcoAlerta = (p) => <Icono {...p} d={<><path d="M12 3 2 21h20L12 3Z"/><path d="M12 10v4m0 3h.01"/></>} />;
 const IcoFlechaArriba = (p) => <Icono {...p} d={<><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></>} />;
 const IcoSalir = (p) => <Icono {...p} d={<><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></>} />;
+const IcoListo = (p) => <Icono {...p} d={<><circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 5-6"/></>} />;
+const IcoInfo = (p) => <Icono {...p} d={<><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></>} />;
+const IcoPanel = (p) => <Icono {...p} d={<><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></>} />;
+const IcoMapa = (p) => <Icono {...p} d={<><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/></>} />;
+const IcoEscudo = (p) => <Icono {...p} d={<><path d="M12 2 20 5v6c0 5.5-3.5 9-8 11-4.5-2-8-5.5-8-11V5Z"/></>} />;
+const IcoDiagnostico = (p) => <Icono {...p} d={<><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3v2h6V3"/><path d="m9 13 2 2 4-4"/></>} />;
+const IcoDocumento = (p) => <Icono {...p} d={<><path d="M6 2h8l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z"/><path d="M14 2v5h5"/><path d="M9 13h6M9 17h6"/></>} />;
+const IcoGrafica = (p) => <Icono {...p} d={<><path d="M4 20V4"/><path d="M4 20h16"/><path d="M8 16v-5m4 5V8m4 8v-3"/></>} />;
+const IcoEngranaje = (p) => <Icono {...p} d={<><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.51 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1Z"/></>} />;
 
 /* Marca de la app: un mini mapa de calor 5×5 dentro de un escudo */
 const LogoMatriz = ({ className }) => (
@@ -1069,12 +1108,12 @@ const leerImportacion = async (archivo, entidad, codigosExistentes) => {
 
 /* ===== 3.5 Componentes básicos ===== */
 
-const CLS_INPUT = 'w-full rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-2 text-sm focus:border-tinta focus:outline-none';
+const CLS_INPUT = 'w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-2 text-sm transition-colors placeholder:text-slate-400 hover:border-slate-400 dark:hover:border-slate-500 focus:border-tinta focus:ring-2 focus:ring-tinta/15 focus:outline-none dark:focus:border-tinta-claro dark:focus:ring-tinta-claro/20';
 const CLS_ETIQUETA = 'block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1';
-const CLS_BOTON = 'inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-semibold transition-colors focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed';
-const CLS_BOTON_PRIMARIO = CLS_BOTON + ' bg-tinta text-white hover:bg-tinta-claro';
-const CLS_BOTON_SECUNDARIO = CLS_BOTON + ' border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700';
-const CLS_BOTON_PELIGRO = CLS_BOTON + ' bg-red-700 text-white hover:bg-red-800';
+const CLS_BOTON = 'inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition-all active:scale-[.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-tinta/40 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100';
+const CLS_BOTON_PRIMARIO = CLS_BOTON + ' bg-tinta text-white shadow-sm hover:bg-tinta-claro hover:shadow';
+const CLS_BOTON_SECUNDARIO = CLS_BOTON + ' border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 shadow-sm hover:border-slate-400 hover:bg-slate-50 dark:hover:border-slate-500 dark:hover:bg-slate-700';
+const CLS_BOTON_PELIGRO = CLS_BOTON + ' bg-red-700 text-white shadow-sm hover:bg-red-800 hover:shadow';
 
 const TituloSeccion = ({ children }) => (
   <h3 className="border-l-4 border-tinta pl-3 text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">{children}</h3>
@@ -1112,13 +1151,16 @@ const Etiqueta = ({ texto }) => (
   <span className={'inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap ' + (ESTILOS_ETIQUETA[texto] || 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300')}>{texto}</span>
 );
 
-/* Avisos flotantes (toasts) */
+/* Avisos flotantes (toasts) con ícono según el tipo */
 const Avisos = ({ avisos }) => (
-  <div className="fixed bottom-4 right-4 z-[70] flex w-72 flex-col gap-2" role="status" aria-live="polite">
+  <div className="fixed bottom-4 right-4 z-[70] flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2" role="status" aria-live="polite">
     {avisos.map(a => (
-      <div key={a.id} className={'animar-subir rounded-lg px-4 py-3 text-sm font-medium text-white shadow-lg ' +
+      <div key={a.id} className={'animar-derecha flex items-start gap-2.5 rounded-xl px-4 py-3 text-sm font-medium text-white shadow-xl ring-1 ring-white/20 ' +
         (a.tipo === 'error' ? 'bg-red-700' : a.tipo === 'info' ? 'bg-tinta-claro' : 'bg-emerald-700')}>
-        {a.texto}
+        {a.tipo === 'error' ? <IcoAlerta className="mt-0.5 h-4 w-4 shrink-0" />
+          : a.tipo === 'info' ? <IcoInfo className="mt-0.5 h-4 w-4 shrink-0" />
+          : <IcoListo className="mt-0.5 h-4 w-4 shrink-0" />}
+        <span className="min-w-0">{a.texto}</span>
       </div>
     ))}
   </div>
@@ -1129,23 +1171,23 @@ const Avisos = ({ avisos }) => (
 const Ventana = ({ titulo, subtitulo, ancho, alCerrar, children, pie }) => {
   const bajoEnFondo = useRef(false);
   return (
-    <div className="animar-aparecer fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 p-3 sm:p-6"
+    <div className="animar-aparecer fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 p-3 backdrop-blur-[2px] sm:p-6"
       role="dialog" aria-modal="true" aria-label={titulo}
       onMouseDown={e => { bajoEnFondo.current = e.target === e.currentTarget; }}
       onMouseUp={e => { if (bajoEnFondo.current && e.target === e.currentTarget) alCerrar(); bajoEnFondo.current = false; }}>
-      <div className={'animar-subir mx-auto my-4 w-full rounded-xl bg-white shadow-xl dark:bg-slate-900 ' + (ancho || 'max-w-2xl')}>
+      <div className={'animar-subir mx-auto my-4 w-full overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-900/5 dark:bg-slate-900 dark:ring-white/10 ' + (ancho || 'max-w-2xl')}>
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-3.5 dark:border-slate-700">
           <div>
             <h2 className="font-display text-lg font-semibold text-tinta dark:text-slate-100">{titulo}</h2>
             {subtitulo && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{subtitulo}</p>}
           </div>
           <button onClick={alCerrar} aria-label="Cerrar"
-            className="rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800">
+            className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800">
             <IcoCerrar className="h-5 w-5" />
           </button>
         </div>
         <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
-        {pie && <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-slate-700">{pie}</div>}
+        {pie && <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3 dark:border-slate-700 dark:bg-slate-800/50">{pie}</div>}
       </div>
     </div>
   );
@@ -1166,15 +1208,22 @@ const ModalConfirmar = ({ props, alCerrar }) => (
 /* ===== 3.6 Pantallas de acceso ===== */
 
 const MarcoAcceso = ({ children, anchoMax }) => (
-  <div className="flex min-h-screen items-center justify-center p-4">
-    <div className={'w-full animar-subir ' + (anchoMax || 'max-w-md')}>
+  <div className="relative flex min-h-screen items-center justify-center overflow-hidden p-4">
+    {/* Fondo decorativo: dos resplandores suaves con los colores de la marca */}
+    <div aria-hidden="true" className="pointer-events-none absolute -top-32 -left-24 h-96 w-96 rounded-full opacity-25 blur-3xl dark:opacity-15"
+      style={{ background: 'radial-gradient(circle, #1F4E7A, transparent 70%)' }}></div>
+    <div aria-hidden="true" className="pointer-events-none absolute -bottom-32 -right-24 h-96 w-96 rounded-full opacity-20 blur-3xl dark:opacity-10"
+      style={{ background: 'radial-gradient(circle, #F9A825, transparent 70%)' }}></div>
+    <div className={'relative w-full animar-subir ' + (anchoMax || 'max-w-md')}>
       <div className="mb-6 flex flex-col items-center gap-2 text-center">
-        <LogoMatriz className="h-14 w-14" />
+        <LogoMatriz className="h-16 w-16 drop-shadow-md" />
         <h1 className="font-display text-2xl font-bold text-tinta dark:text-slate-100">Matriz de Riesgos MIPG</h1>
         <p className="text-sm text-slate-500 dark:text-slate-400">Administración del riesgo · metodología DAFP</p>
       </div>
-      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-        {children}
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl ring-1 ring-slate-900/5 dark:border-slate-700 dark:bg-slate-900 dark:ring-white/10">
+        <div className="h-1 w-full" aria-hidden="true"
+          style={{ background: 'linear-gradient(90deg, #16324F 0%, #1F4E7A 30%, #2E7D32 48%, #F9A825 66%, #EF6C00 83%, #C62828 100%)' }}></div>
+        <div className="p-6">{children}</div>
       </div>
     </div>
   </div>
@@ -1374,10 +1423,20 @@ const fechaMasDias = (n) => {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 };
 
-const TarjetaKpi = ({ etiqueta, valor, detalle, alerta }) => (
-  <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-    <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{etiqueta}</p>
-    <p className={'mt-1 font-display text-3xl font-bold ' + (alerta ? 'text-red-700 dark:text-red-400' : 'text-tinta dark:text-slate-100')}>{valor}</p>
+const TarjetaKpi = ({ etiqueta, valor, detalle, alerta, icono }) => (
+  <div className={'tarjeta relative overflow-hidden rounded-xl border bg-white p-4 dark:bg-slate-900 ' +
+    (alerta ? 'border-red-200 dark:border-red-900' : 'border-slate-200 dark:border-slate-700')}>
+    <span className={'absolute inset-y-0 left-0 w-1 ' + (alerta ? 'bg-red-600' : 'bg-tinta dark:bg-tinta-claro')} aria-hidden="true"></span>
+    <div className="flex items-start justify-between gap-2">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{etiqueta}</p>
+      {icono && (
+        <span className={'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ' +
+          (alerta ? 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-400' : 'bg-tinta-tenue text-tinta dark:bg-slate-800 dark:text-slate-300')}>
+          {icono}
+        </span>
+      )}
+    </div>
+    <p className={'num-tab mt-1 font-display text-3xl font-bold ' + (alerta ? 'text-red-700 dark:text-red-400' : 'text-tinta dark:text-slate-100')}>{valor}</p>
     {detalle && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{detalle}</p>}
   </div>
 );
@@ -1396,14 +1455,14 @@ const Dona = ({ conteos, total }) => {
     <div className="flex flex-wrap items-center justify-center gap-6">
       <div className="relative h-36 w-36">
         <svg viewBox="0 0 100 100" className="h-36 w-36 -rotate-90">
-          <circle cx="50" cy="50" r={R} fill="none" stroke="#E2E8F0" strokeWidth="14" />
+          <circle cx="50" cy="50" r={R} fill="none" stroke="#E2E8F0" strokeWidth="14" className="dark:opacity-20" />
           {segmentos.filter(s => s.n > 0).map(s => (
-            <circle key={s.zona} cx="50" cy="50" r={R} fill="none" stroke={ZONAS[s.zona].color}
+            <circle key={s.zona} cx="50" cy="50" r={R} fill="none" stroke={ZONAS[s.zona].color} className="dona-segmento"
               strokeWidth="14" strokeDasharray={(s.frac * C) + ' ' + C} strokeDashoffset={-s.offset * C} />
           ))}
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="font-display text-2xl font-bold text-tinta dark:text-slate-100">{total}</span>
+          <span className="num-tab font-display text-2xl font-bold text-tinta dark:text-slate-100">{total}</span>
           <span className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">riesgos</span>
         </div>
       </div>
@@ -1412,7 +1471,8 @@ const Dona = ({ conteos, total }) => {
           <li key={s.zona} className="flex items-center gap-2">
             <span className="h-3 w-3 rounded-sm" style={{ backgroundColor: ZONAS[s.zona].color }} aria-hidden="true"></span>
             <span className="w-20 text-slate-600 dark:text-slate-300">{s.zona}</span>
-            <span className="font-semibold text-slate-800 dark:text-slate-100">{s.n}</span>
+            <span className="num-tab w-6 text-right font-semibold text-slate-800 dark:text-slate-100">{s.n}</span>
+            <span className="num-tab text-xs text-slate-400">{total ? Math.round(s.frac * 100) + '%' : ''}</span>
           </li>
         ))}
       </ul>
@@ -1431,10 +1491,11 @@ const BarrasProceso = ({ riesgosCalc }) => {
       {filas.map(([proceso, n]) => (
         <li key={proceso} className="flex items-center gap-3 text-sm">
           <span className="w-40 shrink-0 truncate text-slate-600 dark:text-slate-300" title={proceso}>{proceso}</span>
-          <span className="h-5 flex-1 overflow-hidden rounded bg-slate-100 dark:bg-slate-800">
-            <span className="block h-full rounded bg-tinta dark:bg-tinta-claro" style={{ width: Math.max(4, (n / max) * 100) + '%' }}></span>
+          <span className="h-5 flex-1 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+            <span className="barra-crecer block h-full rounded-full"
+              style={{ width: Math.max(4, (n / max) * 100) + '%', background: 'linear-gradient(90deg, #16324F, #1F4E7A)' }}></span>
           </span>
-          <span className="w-6 text-right font-semibold text-slate-800 dark:text-slate-100">{n}</span>
+          <span className="num-tab w-6 text-right font-semibold text-slate-800 dark:text-slate-100">{n}</span>
         </li>
       ))}
     </ul>
@@ -1481,15 +1542,18 @@ const Panel = ({ riesgosCalc, abrirModal, puedeEditar }) => {
   return (
     <div className="animar-subir space-y-5">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <TarjetaKpi etiqueta="Riesgos activos" valor={noCerrados.length}
+        <TarjetaKpi etiqueta="Riesgos activos" valor={noCerrados.length} icono={<IcoEscudo className="h-4 w-4" />}
           detalle={materializados ? materializados + ' materializado(s)' : 'Sin materializaciones'} alerta={materializados > 0} />
-        <TarjetaKpi etiqueta="En zona alta o extrema" valor={criticos.length} detalle="Riesgo residual" alerta={criticos.length > 0} />
-        <TarjetaKpi etiqueta="Acciones vencidas" valor={vencidas.length} detalle="Del plan de acción" alerta={vencidas.length > 0} />
-        <TarjetaKpi etiqueta={'Seguimientos ' + periodo} valor={segsPeriodo} detalle="Registrados en el periodo" />
+        <TarjetaKpi etiqueta="En zona alta o extrema" valor={criticos.length} detalle="Riesgo residual"
+          alerta={criticos.length > 0} icono={<IcoAlerta className="h-4 w-4" />} />
+        <TarjetaKpi etiqueta="Acciones vencidas" valor={vencidas.length} detalle="Del plan de acción"
+          alerta={vencidas.length > 0} icono={<IcoReloj className="h-4 w-4" />} />
+        <TarjetaKpi etiqueta={'Seguimientos ' + periodo} valor={segsPeriodo} detalle="Registrados en el periodo"
+          icono={<IcoListo className="h-4 w-4" />} />
       </div>
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <section className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
           <div className="mb-3 flex items-center justify-between gap-2">
             <TituloSeccion>Mapa de calor residual</TituloSeccion>
             <span className="text-xs text-slate-400">Toca una celda para ver sus riesgos</span>
@@ -1498,19 +1562,19 @@ const Panel = ({ riesgosCalc, abrirModal, puedeEditar }) => {
             alClicCelda={(p, i) => abrirModal({ tipo: 'celda', props: { p, i, vista: 'residual' } })} />
         </section>
 
-        <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <section className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
           <div className="mb-3"><TituloSeccion>Distribución por zona residual</TituloSeccion></div>
           <Dona conteos={conteosZona} total={noCerrados.length} />
         </section>
       </div>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+      <section className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
         <div className="mb-3"><TituloSeccion>Riesgos por proceso</TituloSeccion></div>
         <BarrasProceso riesgosCalc={noCerrados} />
       </section>
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <section className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
           <div className="mb-3"><TituloSeccion>Prioridad: zona alta y extrema</TituloSeccion></div>
           {criticos.length ? (
             <ul className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -1528,7 +1592,7 @@ const Panel = ({ riesgosCalc, abrirModal, puedeEditar }) => {
           ) : <p className="text-sm text-slate-500 dark:text-slate-400">Ningún riesgo en zona alta o extrema. Buen trabajo.</p>}
         </section>
 
-        <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <section className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
           <div className="mb-3"><TituloSeccion>Acciones por vencer (30 días)</TituloSeccion></div>
           {proximas.length ? (
             <ul className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -1592,7 +1656,7 @@ const MapaCalor = ({ riesgosCalc, vista, tam, alClicCelda }) => {
                 return (
                   <button key={i} type="button" disabled={!puedeClic}
                     onClick={() => puedeClic && alClicCelda(p, i)}
-                    className={'celda-mapa flex flex-1 items-center justify-center rounded font-bold ' + altoCelda + (puedeClic ? '' : ' cursor-default')}
+                    className={'celda-mapa flex flex-1 items-center justify-center rounded-md font-bold ' + altoCelda + (puedeClic ? '' : ' cursor-default')}
                     style={{ backgroundColor: z.color, opacity: n ? 1 : 0.25, color: z.textoOscuro ? '#1E293B' : '#FFFFFF' }}
                     aria-label={'Probabilidad ' + NIVELES_PROBABILIDAD_DEFAULT[p - 1].etiqueta + ' por impacto ' + NIVELES_IMPACTO_DEFAULT[i - 1].etiqueta + ': ' + n + ' riesgo(s), zona ' + zona}>
                     {n ? (grande ? n : (n > 9 ? '9+' : n)) : ''}
@@ -1629,7 +1693,7 @@ const MapaTab = ({ riesgosCalc, abrirModal }) => {
 
   return (
     <div className="animar-subir space-y-5">
-      <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5 dark:border-slate-700 dark:bg-slate-900">
+      <section className="tarjeta rounded-xl border border-slate-200 bg-white p-4 sm:p-5 dark:border-slate-700 dark:bg-slate-900">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <TituloSeccion>Mapa de calor · {vista === 'residual' ? 'riesgo residual' : 'riesgo inherente'}</TituloSeccion>
           <div className="inline-flex rounded-lg border border-slate-300 p-0.5 dark:border-slate-600" role="group" aria-label="Cambiar vista del mapa">
@@ -1657,7 +1721,7 @@ const MapaTab = ({ riesgosCalc, abrirModal }) => {
         </div>
       </section>
 
-      <details className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+      <details className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
         <summary className="cursor-pointer text-sm font-semibold text-tinta dark:text-slate-200">
           Criterios DAFP de probabilidad e impacto
         </summary>
@@ -1780,23 +1844,23 @@ const RiesgosTab = ({ riesgosCalc, ctx }) => {
 
   return (
     <div className="animar-subir space-y-4">
-      <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-        <div className="flex flex-wrap items-center gap-2">
+      <div className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
           <input aria-label="Buscar riesgos" placeholder="Buscar por código, descripción, causa o responsable…"
-            className={CLS_INPUT + ' min-w-[220px] flex-1'} value={f.texto} onChange={ponF('texto')} />
-          <select aria-label="Filtrar por proceso" className={CLS_INPUT + ' w-auto'} value={f.proceso} onChange={ponF('proceso')}>
+            className={CLS_INPUT + ' col-span-2 lg:col-span-4'} value={f.texto} onChange={ponF('texto')} />
+          <select aria-label="Filtrar por proceso" className={CLS_INPUT} value={f.proceso} onChange={ponF('proceso')}>
             <option value="">Todos los procesos</option>
             {(entidad.procesos || []).map(p => <option key={p} value={p}>{p}</option>)}
           </select>
-          <select aria-label="Filtrar por tipo" className={CLS_INPUT + ' w-auto'} value={f.tipo} onChange={ponF('tipo')}>
+          <select aria-label="Filtrar por tipo" className={CLS_INPUT} value={f.tipo} onChange={ponF('tipo')}>
             <option value="">Todos los tipos</option>
             {TIPOS_RIESGO.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
-          <select aria-label="Filtrar por zona residual" className={CLS_INPUT + ' w-auto'} value={f.zona} onChange={ponF('zona')}>
+          <select aria-label="Filtrar por zona residual" className={CLS_INPUT} value={f.zona} onChange={ponF('zona')}>
             <option value="">Toda zona residual</option>
             {NOMBRES_ZONAS.map(z => <option key={z} value={z}>{z}</option>)}
           </select>
-          <select aria-label="Filtrar por estado" className={CLS_INPUT + ' w-auto'} value={f.estado} onChange={ponF('estado')}>
+          <select aria-label="Filtrar por estado" className={CLS_INPUT} value={f.estado} onChange={ponF('estado')}>
             <option value="">Todo estado</option>
             {ESTADOS_RIESGO.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
@@ -1838,7 +1902,7 @@ const RiesgosTab = ({ riesgosCalc, ctx }) => {
             : 'Ningún riesgo coincide con los filtros aplicados.'}
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+        <div className="tarjeta overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
           <table className="w-full min-w-[1020px] text-sm">
             <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">
               <tr>
@@ -2621,7 +2685,7 @@ const SeguimientoTab = ({ riesgosCalc, ctx }) => {
 
   return (
     <div className="animar-subir space-y-5">
-      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+      <section className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <TituloSeccion>Acciones del plan</TituloSeccion>
           <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filtrar acciones">
@@ -2669,11 +2733,11 @@ const SeguimientoTab = ({ riesgosCalc, ctx }) => {
         ) : <p className="text-sm text-slate-500 dark:text-slate-400">No hay acciones en este filtro.</p>}
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+      <section className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <TituloSeccion>Bitácora de seguimientos</TituloSeccion>
           <div className="flex flex-wrap items-center gap-2">
-            <select aria-label="Filtrar por periodo" className={CLS_INPUT + ' w-auto'} value={filtroPeriodo} onChange={e => setFiltroPeriodo(e.target.value)}>
+            <select aria-label="Filtrar por periodo" className={CLS_INPUT + ' !w-auto'} value={filtroPeriodo} onChange={e => setFiltroPeriodo(e.target.value)}>
               <option value="">Todos los periodos</option>
               {periodos.map(p => <option key={p} value={p}>{p}</option>)}
             </select>
@@ -2750,7 +2814,7 @@ const AdminTab = ({ ctx }) => {
 
   return (
     <div className="animar-subir space-y-5">
-      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+      <section className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
         <div className="mb-3 flex items-center justify-between gap-2">
           <TituloSeccion>Entidades</TituloSeccion>
           <button className={CLS_BOTON_PRIMARIO} onClick={() => ctx.abrirModal({ tipo: 'entidad', props: {} })}>
@@ -2777,7 +2841,7 @@ const AdminTab = ({ ctx }) => {
         </div>
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+      <section className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
         <div className="mb-3 flex items-center justify-between gap-2">
           <TituloSeccion>Usuarios</TituloSeccion>
           <button className={CLS_BOTON_PRIMARIO}
@@ -2817,7 +2881,7 @@ const AdminTab = ({ ctx }) => {
         )}
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+      <section className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
         <div className="mb-3 flex items-center justify-between gap-2">
           <TituloSeccion>Historial de {ctx.entidad.sigla || ctx.entidad.nombre} (últimos 300)</TituloSeccion>
           <button className={CLS_BOTON_SECUNDARIO} onClick={cargarHistorial}>Actualizar</button>
@@ -3119,8 +3183,9 @@ const BotonSubir = () => {
 };
 
 const PESTANIAS = [
-  ['panel', 'Panel'], ['riesgos', 'Riesgos'], ['mapa', 'Mapa'], ['seguimiento', 'Seguimiento'],
-  ['autodiag', 'Autodiagnóstico'], ['paac', 'PAAC'], ['planes', 'Planes 612'], ['furag', 'FURAG']
+  ['panel', 'Panel', IcoPanel], ['riesgos', 'Riesgos', IcoAlerta], ['mapa', 'Mapa', IcoMapa],
+  ['seguimiento', 'Seguimiento', IcoReloj], ['autodiag', 'Autodiagnóstico', IcoDiagnostico],
+  ['paac', 'PAAC', IcoEscudo], ['planes', 'Planes 612', IcoDocumento], ['furag', 'FURAG', IcoGrafica]
 ];
 
 const App = () => {
@@ -3280,10 +3345,13 @@ const App = () => {
         alNuevaEntidad={() => abrirModal({ tipo: 'entidad', props: {} })} alSalir={salir} esAdmin={esAdmin} />
     );
   } else if (fase === 'listo' && entidad) {
-    const pestanias = esAdmin ? [...PESTANIAS, ['admin', 'Administración']] : PESTANIAS;
+    const pestanias = esAdmin ? [...PESTANIAS, ['admin', 'Administración', IcoEngranaje]] : PESTANIAS;
     contenido = (
       <div className="min-h-screen">
-        <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur dark:border-slate-700 dark:bg-slate-900/95">
+        <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/95">
+          {/* Firma visual: el espectro de zonas de riesgo como franja de marca */}
+          <div className="h-1 w-full" aria-hidden="true"
+            style={{ background: 'linear-gradient(90deg, #16324F 0%, #1F4E7A 30%, #2E7D32 48%, #F9A825 66%, #EF6C00 83%, #C62828 100%)' }}></div>
           <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 sm:px-6">
             <LogoMatriz className="h-9 w-9 shrink-0" />
             <div className="min-w-0 flex-1">
@@ -3323,12 +3391,14 @@ const App = () => {
           </div>
           <nav className="mx-auto max-w-7xl overflow-x-auto px-3 sm:px-6" aria-label="Secciones">
             <div className="flex gap-1">
-              {pestanias.map(([clave, nombre]) => (
+              {pestanias.map(([clave, nombre, Ico]) => (
                 <button key={clave} onClick={() => setPestania(clave)}
-                  className={'whitespace-nowrap border-b-2 px-3 py-2 text-sm font-semibold transition-colors ' +
+                  aria-current={pestania === clave ? 'page' : undefined}
+                  className={'inline-flex items-center gap-1.5 whitespace-nowrap rounded-t-lg border-b-2 px-3 py-2 text-sm font-semibold transition-colors ' +
                     (pestania === clave
-                      ? 'border-tinta text-tinta dark:border-tinta-claro dark:text-slate-100'
-                      : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200')}>
+                      ? 'border-tinta bg-tinta-tenue/70 text-tinta dark:border-tinta-claro dark:bg-slate-800 dark:text-slate-100'
+                      : 'border-transparent text-slate-500 hover:bg-slate-50 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-200')}>
+                  {Ico && <Ico className={'h-4 w-4 ' + (pestania === clave ? '' : 'opacity-70')} />}
                   {nombre}
                 </button>
               ))}
@@ -3354,9 +3424,12 @@ const App = () => {
         </main>
 
         <footer className="mx-auto max-w-7xl px-3 pb-6 sm:px-6">
-          <p className="border-t border-slate-200 pt-3 text-center text-[11px] text-slate-400 dark:border-slate-800">
-            Matriz de Riesgos MIPG · metodología de la Guía para la administración del riesgo (DAFP) · los datos se sincronizan en tiempo real
-          </p>
+          <div className="flex flex-col items-center gap-1.5 border-t border-slate-200 pt-4 dark:border-slate-800">
+            <LogoMatriz className="h-6 w-6 opacity-60" />
+            <p className="text-center text-[11px] text-slate-400">
+              Matriz de Riesgos MIPG · metodología de la Guía para la administración del riesgo (DAFP) · los datos se sincronizan en tiempo real
+            </p>
+          </div>
         </footer>
 
         <BotonSubir />
@@ -3623,7 +3696,7 @@ const EstadoMipg = ({ ctx }) => {
   );
 
   return (
-    <section className="animar-subir mb-5 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+    <section className="tarjeta animar-subir mb-5 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
       <div className="mb-3 flex items-center justify-between gap-2">
         <TituloSeccion>Estado MIPG</TituloSeccion>
         <span className="text-xs text-slate-400">vigencia {anio}</span>
@@ -3651,7 +3724,7 @@ const EstadoMipg = ({ ctx }) => {
 const AutodiagnosticoTab = ({ ctx }) => {
   const d = ctx.datosMipg;
   if (d === null) {
-    return <p className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400 dark:border-slate-700 dark:bg-slate-900" role="status">Cargando el autodiagnóstico…</p>;
+    return <p className="tarjeta rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400 dark:border-slate-700 dark:bg-slate-900" role="status">Cargando el autodiagnóstico…</p>;
   }
   const docPara = (polId) => d.autodiagnosticos.find(x => x.politicaId === polId);
   const filasPol = POLITICAS.map(p => ({ p, doc: docPara(p.id), puntaje: puntajeAutodiag(docPara(p.id), p) }));
@@ -3684,7 +3757,7 @@ const AutodiagnosticoTab = ({ ctx }) => {
 
   return (
     <div className="animar-subir space-y-5">
-      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+      <section className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <TituloSeccion>Autodiagnóstico por dimensión</TituloSeccion>
           <div className="flex items-center gap-3">
@@ -3726,7 +3799,7 @@ const AutodiagnosticoTab = ({ ctx }) => {
               {delDim.map(x => (
                 <button key={x.p.id}
                   onClick={() => ctx.abrirModal({ tipo: 'politica', props: { politicaId: x.p.id } })}
-                  className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition-colors hover:border-tinta hover:bg-tinta-tenue dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800">
+                  className="tarjeta flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition-colors hover:border-tinta hover:bg-tinta-tenue dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800">
                   <ChipPuntaje p={x.puntaje} grande />
                   <span className="min-w-0 flex-1">
                     <span className="linea-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">{x.p.nombre}</span>
@@ -3862,7 +3935,7 @@ const PaacTab = ({ ctx }) => {
   const d = ctx.datosMipg;
   const [anio, setAnio] = useState(new Date().getFullYear());
   if (d === null) {
-    return <p className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400 dark:border-slate-700 dark:bg-slate-900" role="status">Cargando el PAAC…</p>;
+    return <p className="tarjeta rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400 dark:border-slate-700 dark:bg-slate-900" role="status">Cargando el PAAC…</p>;
   }
   const anios = [...new Set([new Date().getFullYear(), ...d.paac.map(x => +x.anio)])].sort((a, b) => b - a);
   const items = d.paac.filter(x => +x.anio === +anio)
@@ -3907,11 +3980,11 @@ const PaacTab = ({ ctx }) => {
 
   return (
     <div className="animar-subir space-y-5">
-      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+      <section className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-3">
             <TituloSeccion>PAAC {anio}</TituloSeccion>
-            <select aria-label="Vigencia del PAAC" className={CLS_INPUT + ' w-auto'} value={anio}
+            <select aria-label="Vigencia del PAAC" className={CLS_INPUT + ' !w-auto'} value={anio}
               onChange={e => setAnio(+e.target.value)}>
               {anios.map(a => <option key={a} value={a}>{a}</option>)}
             </select>
@@ -3951,7 +4024,7 @@ const PaacTab = ({ ctx }) => {
           if (!delComp.length) return null;
           const prom = Math.round(delComp.reduce((s, x) => s + x.avance, 0) / delComp.length);
           return (
-            <section key={comp} className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+            <section key={comp} className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">
                   Componente {comp} · {PAAC_COMPONENTES[comp]}
@@ -4181,7 +4254,7 @@ const PlanesTab = ({ ctx }) => {
   const d = ctx.datosMipg;
   const [anio, setAnio] = useState(new Date().getFullYear());
   if (d === null) {
-    return <p className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400 dark:border-slate-700 dark:bg-slate-900" role="status">Cargando los planes…</p>;
+    return <p className="tarjeta rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400 dark:border-slate-700 dark:bg-slate-900" role="status">Cargando los planes…</p>;
   }
   const anios = [...new Set([new Date().getFullYear(), ...d.planes.map(x => +x.anio), ...d.paac.map(x => +x.anio)])].sort((a, b) => b - a);
   const items = d.planes.filter(x => +x.anio === +anio);
@@ -4224,11 +4297,11 @@ const PlanesTab = ({ ctx }) => {
 
   return (
     <div className="animar-subir space-y-5">
-      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+      <section className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-3">
             <TituloSeccion>Planes institucionales · Decreto 612</TituloSeccion>
-            <select aria-label="Vigencia de los planes" className={CLS_INPUT + ' w-auto'} value={anio}
+            <select aria-label="Vigencia de los planes" className={CLS_INPUT + ' !w-auto'} value={anio}
               onChange={e => setAnio(+e.target.value)}>
               {anios.map(a => <option key={a} value={a}>{a}</option>)}
             </select>
@@ -4250,7 +4323,7 @@ const PlanesTab = ({ ctx }) => {
           return (
             <button key={p.id}
               onClick={() => p.desdePaac ? ctx.irA('paac') : ctx.abrirModal({ tipo: 'plan612', props: { planId: p.id, anio } })}
-              className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition-colors hover:border-tinta hover:bg-tinta-tenue dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800">
+              className="tarjeta flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition-colors hover:border-tinta hover:bg-tinta-tenue dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800">
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-tinta font-display text-sm font-bold text-white">{p.id}</span>
               <span className="min-w-0 flex-1">
                 <span className="linea-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">{p.nombre}</span>
@@ -4431,7 +4504,7 @@ const DeltaPuntaje = ({ actual, anterior }) => {
 const FuragTab = ({ ctx }) => {
   const d = ctx.datosMipg;
   if (d === null) {
-    return <p className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400 dark:border-slate-700 dark:bg-slate-900" role="status">Cargando el FURAG…</p>;
+    return <p className="tarjeta rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400 dark:border-slate-700 dark:bg-slate-900" role="status">Cargando el FURAG…</p>;
   }
   const vigencias = [...d.furag].sort((a, b) => (+a.vigencia) - (+b.vigencia)); // ascendente para leer la evolución
 
@@ -4467,7 +4540,7 @@ const FuragTab = ({ ctx }) => {
 
   return (
     <div className="animar-subir space-y-5">
-      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+      <section className="tarjeta rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <TituloSeccion>Resultados FURAG por vigencia</TituloSeccion>
           <div className="flex flex-wrap gap-2">
@@ -4492,7 +4565,7 @@ const FuragTab = ({ ctx }) => {
           {ctx.puedeEditar && ' Usa "Registrar vigencia" para capturar los resultados oficiales.'}
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+        <div className="tarjeta overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
           <table className="w-full min-w-[720px] text-sm">
             <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">
               <tr>
